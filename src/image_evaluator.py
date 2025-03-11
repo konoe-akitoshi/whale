@@ -316,10 +316,30 @@ class ImageEvaluator:
             List[Dict[str, Any]]: 評価結果を含む画像情報のリスト
         """
         results = []
-        for image_info in batch:
+        
+        # バッチ内の各画像を評価（進捗バー付き）
+        for image_info in tqdm(
+            batch, 
+            desc=f"バッチ内評価", 
+            unit="枚",
+            leave=False,  # バッチが終わったら進捗バーを消す
+            colour=True,
+            ncols=80,
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
+        ):
             try:
+                # ファイル名を表示
+                filename = image_info.get('filename', '不明なファイル')
+                tqdm.write(f"評価中: {filename}")
+                
                 result = self.evaluate_image(image_info)
                 results.append(result)
+                
+                # スコアを表示
+                score = result.get('score', 0)
+                is_good = "✓" if result.get('is_good', False) else "✗"
+                tqdm.write(f"評価完了: {filename} - スコア: {score:.1f} {is_good}")
+                
                 # APIレート制限を考慮して少し待機
                 time.sleep(0.5)
             except Exception as e:
@@ -328,6 +348,7 @@ class ImageEvaluator:
                 image_info['score'] = 0
                 image_info['is_good'] = False
                 results.append(image_info)
+        
         return results
         
     def evaluate_images(self, images: List[Dict[str, Any]], max_workers: int = 4, batch_size: int = 10) -> List[Dict[str, Any]]:
@@ -362,7 +383,15 @@ class ImageEvaluator:
             futures = [executor.submit(self._evaluate_batch, batch) for batch in batches]
             
             # 進捗状況を表示しながら結果を取得
-            for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="バッチ処理中"):
+            for future in tqdm(
+                concurrent.futures.as_completed(futures), 
+                total=len(futures), 
+                desc="画像評価中", 
+                unit="バッチ",
+                colour=True,
+                ncols=100,
+                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} バッチ [{elapsed}<{remaining}, {rate_fmt}]"
+            ):
                 batch_results = future.result()
                 results.extend(batch_results)
                 

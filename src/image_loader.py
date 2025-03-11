@@ -71,7 +71,14 @@ class ImageLoader:
         images = []
         
         # プログレスバーを表示しながら画像を読み込む
-        for file_path in tqdm(image_files, desc="画像読み込み中"):
+        for file_path in tqdm(
+            image_files, 
+            desc="画像読み込み中", 
+            unit="枚",
+            colour=True,
+            ncols=100,
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]"
+        ):
             try:
                 img = Image.open(file_path)
                 
