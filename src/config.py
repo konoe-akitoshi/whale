@@ -22,13 +22,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger('whale')
 
-# OpenAI API設定
+# API設定
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 if not OPENAI_API_KEY:
     logger.warning('OPENAI_API_KEYが設定されていません。')
 
+# Ollama設定
+OLLAMA_HOST = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
+OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llava')
+
 # 画像評価設定
 QUALITY_THRESHOLD = float(os.getenv('QUALITY_THRESHOLD', '7.5'))
+# デフォルトのAPI（'openai' または 'ollama'）
+DEFAULT_API = os.getenv('DEFAULT_API', 'openai')
 
 # フォルダ設定
 DEFAULT_IMAGE_FOLDER = os.getenv('DEFAULT_IMAGE_FOLDER', './data/images')

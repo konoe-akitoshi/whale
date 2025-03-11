@@ -29,7 +29,7 @@ except ImportError:
 def parse_arguments():
     """コマンドライン引数を解析する"""
     parser = argparse.ArgumentParser(
-        description='OpenAI APIを使用して写真を評価し、高品質な写真を選別するツール'
+        description='OpenAI APIまたはOllama Visionを使用して写真を評価し、高品質な写真を選別するツール'
     )
     
     parser.add_argument(
@@ -80,6 +80,29 @@ def parse_arguments():
         help='画像の最大サイズ（幅または高さ）（デフォルト: 1024ピクセル）'
     )
     
+    # API選択オプション
+    parser.add_argument(
+        '--api', '-a',
+        type=str,
+        choices=['openai', 'ollama'],
+        default=DEFAULT_API,
+        help='使用するAPI（openai または ollama）（デフォルト: 環境変数またはopenai）'
+    )
+    
+    parser.add_argument(
+        '--ollama-model', '-O',
+        type=str,
+        default=OLLAMA_MODEL,
+        help=f'使用するOllamaモデル（デフォルト: {OLLAMA_MODEL}）'
+    )
+    
+    parser.add_argument(
+        '--ollama-host', '-H',
+        type=str,
+        default=OLLAMA_HOST,
+        help=f'OllamaのホストURL（デフォルト: {OLLAMA_HOST}）'
+    )
+    
     return parser.parse_args()
 
 def evaluate_photos(
@@ -87,7 +110,10 @@ def evaluate_photos(
     max_files: Optional[int] = None,
     max_workers: int = 4,
     batch_size: int = 10,
-    resize_max: int = 1024
+    resize_max: int = 1024,
+    api_type: str = 'openai',
+    ollama_host: str = None,
+    ollama_model: str = None
 ) -> Dict[str, Any]:
     """
     指定されたフォルダ内の写真を評価する
@@ -98,11 +124,15 @@ def evaluate_photos(
         max_workers: 並列処理の最大ワーカー数
         batch_size: 一度に処理するバッチサイズ
         resize_max: 画像の最大サイズ（幅または高さ）
+        api_type: 使用するAPI（'openai'または'ollama'）
+        ollama_host: OllamaのホストURL
+        ollama_model: Ollamaのモデル名
         
     Returns:
         Dict[str, Any]: 評価結果の概要
     """
-    logger.info(f"写真評価を開始します（並列処理: {max_workers}ワーカー、バッチサイズ: {batch_size}）")
+    api_name = "OpenAI API" if api_type == 'openai' else f"Ollama Vision ({ollama_model})"
+    logger.info(f"写真評価を開始します（API: {api_name}、並列処理: {max_workers}ワーカー、バッチサイズ: {batch_size}）")
     
     # 画像の読み込み
     loader = ImageLoader(folder_path)
@@ -114,10 +144,17 @@ def evaluate_photos(
     
     # 画像の評価
     try:
-        evaluator = ImageEvaluator()
+        # 評価器の初期化（APIタイプを指定）
+        evaluator = ImageEvaluator(
+            api_type=api_type,
+            ollama_host=ollama_host,
+            ollama_model=ollama_model
+        )
+        
         # リサイズの最大サイズを設定（オリジナルの関数を保存）
         original_resize = evaluator._resize_image
         evaluator._resize_image = lambda img, max_size=None: original_resize(img, resize_max)
+        
         # 並列処理で評価
         evaluated_images = evaluator.evaluate_images(images, max_workers=max_workers, batch_size=batch_size)
     except Exception as e:
@@ -212,7 +249,10 @@ def main():
             args.max,
             max_workers=args.workers,
             batch_size=args.batch_size,
-            resize_max=args.resize
+            resize_max=args.resize,
+            api_type=args.api,
+            ollama_host=args.ollama_host,
+            ollama_model=args.ollama_model
         )
         
         if results.get("status") == "success":

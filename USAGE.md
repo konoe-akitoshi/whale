@@ -24,13 +24,30 @@ venv\Scripts\activate     # Windowsの場合
 pip install -r requirements.txt
 ```
 
-2. `.env`ファイルを編集して、OpenAI APIキーを設定します：
+2. `.env`ファイルを編集して、使用するAPIの設定を行います：
+
+### OpenAI APIを使用する場合（デフォルト）
 
 ```
 OPENAI_API_KEY=your_api_key_here
+DEFAULT_API=openai
 ```
 
 OpenAI APIキーは[OpenAIのダッシュボード](https://platform.openai.com/api-keys)から取得できます。
+
+### Ollama Visionを使用する場合
+
+```
+OLLAMA_HOST=http://localhost:11434
+OLLAMA_MODEL=llava
+DEFAULT_API=ollama
+```
+
+Ollamaは、ローカルで実行できるLLMのランタイムです。以下の手順でセットアップします：
+
+1. [Ollama](https://ollama.com/)をインストール
+2. LLaVAなどのVisionモデルをダウンロード：`ollama pull llava`
+3. Ollamaサーバーを起動：`ollama serve`
 
 ## 基本的な使用方法
 
@@ -85,6 +102,21 @@ uv run main.py --folder /path/to/your/photos --resize 800
 uv run main.py --folder /path/to/your/photos --workers 8 --batch-size 20 --resize 800 --max 100
 ```
 
+### Ollama Visionを使用する
+
+コマンドラインからOllama Visionを使用する場合：
+
+```bash
+# Ollama Visionを使用して評価
+uv run main.py --folder /path/to/your/photos --api ollama
+
+# 特定のOllamaモデルを指定
+uv run main.py --folder /path/to/your/photos --api ollama --ollama-model bakllava
+
+# Ollamaのホストを指定（リモートサーバーの場合）
+uv run main.py --folder /path/to/your/photos --api ollama --ollama-host http://192.168.1.100:11434
+```
+
 ## 評価結果
 
 評価が完了すると、以下のファイルが生成されます：
@@ -131,3 +163,26 @@ ValueError: OpenAI APIキーが設定されていません
 
 OpenAI APIには使用制限があります。大量の画像を評価する場合は、
 `--max`オプションを使用して一度に評価する画像数を制限することをお勧めします。
+
+### Ollamaの接続エラー
+
+```
+Ollama Visionでの画像評価中にエラーが発生しました: HTTPConnectionPool(host='localhost', port=11434)
+```
+
+以下を確認してください：
+1. Ollamaがインストールされ、実行されているか
+2. 指定したモデル（例：llava）がダウンロードされているか（`ollama list`で確認）
+3. ホストとポートが正しいか（デフォルト：http://localhost:11434）
+
+### Ollamaのモデルエラー
+
+```
+Ollamaの出力からJSONを抽出できませんでした
+```
+
+使用しているOllamaモデルがVision機能をサポートしているか確認してください。
+サポートされているモデルには以下があります：
+- llava
+- bakllava
+- moondream

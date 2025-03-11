@@ -1,6 +1,6 @@
 """
 画像評価モジュール
-OpenAI APIを使用して画像を評価する機能を提供します。
+OpenAI APIまたはOllama Visionを使用して画像を評価する機能を提供します。
 並列処理を使用して大量の画像を効率的に評価します。
 """
 
@@ -8,30 +8,49 @@ import base64
 import io
 import json
 import time
+import requests
 import concurrent.futures
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Literal, Optional
 from PIL import Image
 from openai import OpenAI
 from tqdm import tqdm
 
-from src.config import OPENAI_API_KEY, QUALITY_THRESHOLD, logger
+from src.config import (
+    OPENAI_API_KEY, OLLAMA_HOST, OLLAMA_MODEL, 
+    QUALITY_THRESHOLD, DEFAULT_API, logger
+)
 
 class ImageEvaluator:
-    """OpenAI APIを使用して画像を評価するクラス"""
+    """OpenAI APIまたはOllama Visionを使用して画像を評価するクラス"""
     
-    def __init__(self, api_key: str = None):
+    def __init__(self, api_type: Literal['openai', 'ollama'] = None, api_key: str = None, 
+                 ollama_host: str = None, ollama_model: str = None):
         """
         初期化
         
         Args:
+            api_type: 使用するAPI（'openai'または'ollama'）
             api_key: OpenAI APIキー（Noneの場合は環境変数から取得）
+            ollama_host: OllamaのホストURL（Noneの場合は環境変数から取得）
+            ollama_model: Ollamaのモデル名（Noneの場合は環境変数から取得）
         """
+        self.api_type = api_type or DEFAULT_API
+        
+        # OpenAI API設定
         self.api_key = api_key or OPENAI_API_KEY
-        if not self.api_key:
+        if self.api_type == 'openai' and not self.api_key:
             raise ValueError("OpenAI APIキーが設定されていません")
             
-        self.client = OpenAI(api_key=self.api_key)
-        logger.info("OpenAI APIクライアントを初期化しました")
+        # Ollama設定
+        self.ollama_host = ollama_host or OLLAMA_HOST
+        self.ollama_model = ollama_model or OLLAMA_MODEL
+        
+        # APIクライアントの初期化
+        if self.api_type == 'openai':
+            self.client = OpenAI(api_key=self.api_key)
+            logger.info("OpenAI APIクライアントを初期化しました")
+        else:
+            logger.info(f"Ollama Vision ({self.ollama_model})を使用します: {self.ollama_host}")
         
     def _resize_image(self, image: Image.Image, max_size: int = 1024) -> Image.Image:
         """
@@ -94,19 +113,52 @@ class ImageEvaluator:
         encoded_image = base64.b64encode(buffer.getvalue()).decode('utf-8')
         return encoded_image
         
-    def evaluate_image(self, image_info: Dict[str, Any]) -> Dict[str, Any]:
+    def _get_evaluation_prompt(self) -> str:
         """
-        1枚の画像を評価する
+        評価用のプロンプトを取得する
+        
+        Returns:
+            str: 評価用のプロンプト
+        """
+        return """
+        あなたは写真の品質を評価する専門家です。
+        与えられた写真を以下の観点から1〜10の数値で評価してください：
+        
+        1. 構図（バランス、フレーミング、視線誘導）
+        2. 露出（明るさ、コントラスト、ダイナミックレンジ）
+        3. 色彩（色のバランス、彩度、色温度）
+        4. 焦点（シャープネス、被写界深度、ボケ具合）
+        5. 被写体（主題の明確さ、表現力、魅力）
+        6. 全体的な印象（感情的なインパクト、記憶に残るか）
+        
+        また、総合評価（1〜10）も提供し、写真の強みと改善点を簡潔に説明してください。
+        
+        回答は必ず以下のJSON形式で返してください：
+        {
+            "composition": 数値,
+            "exposure": 数値,
+            "color": 数値,
+            "focus": 数値,
+            "subject": 数値,
+            "overall_impression": 数値,
+            "total_score": 数値,
+            "strengths": "写真の強み",
+            "improvements": "改善点",
+            "description": "写真の簡潔な説明"
+        }
+        """
+    
+    def _evaluate_with_openai(self, image_info: Dict[str, Any], encoded_image: str) -> Dict[str, Any]:
+        """
+        OpenAI APIを使用して画像を評価する
         
         Args:
             image_info: 画像情報の辞書
+            encoded_image: base64エンコードされた画像データ
             
         Returns:
             Dict[str, Any]: 評価結果を含む画像情報
         """
-        image = image_info['image']
-        encoded_image = self._encode_image(image)
-        
         try:
             # OpenAI APIを呼び出して画像を評価
             response = self.client.chat.completions.create(
@@ -114,33 +166,7 @@ class ImageEvaluator:
                 messages=[
                     {
                         "role": "system",
-                        "content": """
-                        あなたは写真の品質を評価する専門家です。
-                        与えられた写真を以下の観点から1〜10の数値で評価してください：
-                        
-                        1. 構図（バランス、フレーミング、視線誘導）
-                        2. 露出（明るさ、コントラスト、ダイナミックレンジ）
-                        3. 色彩（色のバランス、彩度、色温度）
-                        4. 焦点（シャープネス、被写界深度、ボケ具合）
-                        5. 被写体（主題の明確さ、表現力、魅力）
-                        6. 全体的な印象（感情的なインパクト、記憶に残るか）
-                        
-                        また、総合評価（1〜10）も提供し、写真の強みと改善点を簡潔に説明してください。
-                        
-                        回答は必ず以下のJSON形式で返してください：
-                        {
-                            "composition": 数値,
-                            "exposure": 数値,
-                            "color": 数値,
-                            "focus": 数値,
-                            "subject": 数値,
-                            "overall_impression": 数値,
-                            "total_score": 数値,
-                            "strengths": "写真の強み",
-                            "improvements": "改善点",
-                            "description": "写真の簡潔な説明"
-                        }
-                        """
+                        "content": self._get_evaluation_prompt()
                     },
                     {
                         "role": "user",
@@ -169,7 +195,6 @@ class ImageEvaluator:
             image_info['evaluation'] = result
             
             # 総合評価スコアを取得
-            import json
             evaluation_dict = json.loads(result)
             image_info['score'] = evaluation_dict.get('total_score', 0)
             image_info['is_good'] = image_info['score'] >= QUALITY_THRESHOLD
@@ -177,11 +202,108 @@ class ImageEvaluator:
             return image_info
             
         except Exception as e:
-            logger.error(f"画像評価中にエラーが発生しました: {str(e)}")
+            logger.error(f"OpenAI APIでの画像評価中にエラーが発生しました: {str(e)}")
             image_info['evaluation'] = None
             image_info['score'] = 0
             image_info['is_good'] = False
             return image_info
+            
+    def _evaluate_with_ollama(self, image_info: Dict[str, Any], encoded_image: str) -> Dict[str, Any]:
+        """
+        Ollama Visionを使用して画像を評価する
+        
+        Args:
+            image_info: 画像情報の辞書
+            encoded_image: base64エンコードされた画像データ
+            
+        Returns:
+            Dict[str, Any]: 評価結果を含む画像情報
+        """
+        try:
+            # Ollama APIエンドポイント
+            url = f"{self.ollama_host}/api/generate"
+            
+            # リクエストデータ
+            data = {
+                "model": self.ollama_model,
+                "prompt": f"""
+                {self._get_evaluation_prompt()}
+                
+                この写真を評価してください:
+                """,
+                "images": [encoded_image],
+                "stream": False,
+                "format": "json"
+            }
+            
+            # APIリクエスト
+            response = requests.post(url, json=data)
+            response.raise_for_status()
+            
+            # レスポンスからJSONを抽出
+            response_data = response.json()
+            result = response_data.get('response', '')
+            
+            # JSONを抽出（Ollamaの出力からJSONだけを取り出す）
+            try:
+                # JSONの開始と終了を見つける
+                json_start = result.find('{')
+                json_end = result.rfind('}') + 1
+                
+                if json_start >= 0 and json_end > json_start:
+                    json_str = result[json_start:json_end]
+                    evaluation_dict = json.loads(json_str)
+                else:
+                    # JSONが見つからない場合、テキスト全体をパースしてみる
+                    evaluation_dict = json.loads(result)
+            except json.JSONDecodeError:
+                # JSONのパースに失敗した場合、デフォルト値を設定
+                logger.warning(f"Ollamaの出力からJSONを抽出できませんでした: {result}")
+                evaluation_dict = {
+                    "composition": 5,
+                    "exposure": 5,
+                    "color": 5,
+                    "focus": 5,
+                    "subject": 5,
+                    "overall_impression": 5,
+                    "total_score": 5,
+                    "strengths": "評価できませんでした",
+                    "improvements": "評価できませんでした",
+                    "description": "評価できませんでした"
+                }
+            
+            # 評価結果を画像情報に追加
+            image_info['evaluation'] = json.dumps(evaluation_dict)
+            image_info['score'] = evaluation_dict.get('total_score', 0)
+            image_info['is_good'] = image_info['score'] >= QUALITY_THRESHOLD
+            
+            return image_info
+            
+        except Exception as e:
+            logger.error(f"Ollama Visionでの画像評価中にエラーが発生しました: {str(e)}")
+            image_info['evaluation'] = None
+            image_info['score'] = 0
+            image_info['is_good'] = False
+            return image_info
+    
+    def evaluate_image(self, image_info: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        1枚の画像を評価する
+        
+        Args:
+            image_info: 画像情報の辞書
+            
+        Returns:
+            Dict[str, Any]: 評価結果を含む画像情報
+        """
+        image = image_info['image']
+        encoded_image = self._encode_image(image)
+        
+        # 選択されたAPIに基づいて評価メソッドを呼び出す
+        if self.api_type == 'openai':
+            return self._evaluate_with_openai(image_info, encoded_image)
+        else:
+            return self._evaluate_with_ollama(image_info, encoded_image)
             
     def _evaluate_batch(self, batch: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
