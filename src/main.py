@@ -115,8 +115,9 @@ def evaluate_photos(
     # 画像の評価
     try:
         evaluator = ImageEvaluator()
-        # リサイズの最大サイズを設定
-        evaluator._resize_image = lambda img, _: evaluator._resize_image(img, resize_max)
+        # リサイズの最大サイズを設定（オリジナルの関数を保存）
+        original_resize = evaluator._resize_image
+        evaluator._resize_image = lambda img, max_size=None: original_resize(img, resize_max)
         # 並列処理で評価
         evaluated_images = evaluator.evaluate_images(images, max_workers=max_workers, batch_size=batch_size)
     except Exception as e:
