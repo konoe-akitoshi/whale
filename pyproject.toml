@@ -1,0 +1,13 @@
+[project]
+name = "whale"
+version = "0.1.0"
+description = "OpenAI APIを使用して写真を評価し、高品質な写真を選別するツール"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "openai>=1.0.0",
+    "pillow>=10.0.0",
+    "python-dotenv>=1.0.0",
+    "tqdm>=4.66.0",
+    "watchdog>=3.0.0",
+]
