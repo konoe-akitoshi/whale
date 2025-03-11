@@ -12,7 +12,10 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 
 # 自作モジュールのインポート
-from src.config import get_image_folder, WATCH_FOLDER, WATCH_INTERVAL, DEFAULT_API, OLLAMA_HOST, OLLAMA_MODEL, logger
+from src.config import (
+    get_image_folder, WATCH_FOLDER, WATCH_INTERVAL, 
+    DEFAULT_API, OLLAMA_HOST, OLLAMA_MODEL, logger
+)
 from src.image_loader import ImageLoader
 from src.image_evaluator import ImageEvaluator
 from src.result_handler import ResultHandler
