@@ -64,6 +64,27 @@ uv run main.py --folder /path/to/your/photos --watch
 uv run main.py --folder /path/to/your/photos --watch --interval 120
 ```
 
+### 並列処理を使用して処理を高速化する
+
+大量の画像を処理する場合、並列処理を使用して処理時間を短縮できます：
+
+```bash
+# ワーカー数を増やす（デフォルト: 4）
+uv run main.py --folder /path/to/your/photos --workers 8
+
+# バッチサイズを変更する（デフォルト: 10）
+uv run main.py --folder /path/to/your/photos --batch-size 20
+
+# 画像のリサイズサイズを変更する（デフォルト: 1024ピクセル）
+uv run main.py --folder /path/to/your/photos --resize 800
+```
+
+複数のオプションを組み合わせることもできます：
+
+```bash
+uv run main.py --folder /path/to/your/photos --workers 8 --batch-size 20 --resize 800 --max 100
+```
+
 ## 評価結果
 
 評価が完了すると、以下のファイルが生成されます：

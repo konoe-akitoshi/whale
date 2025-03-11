@@ -1,12 +1,15 @@
 """
 画像評価モジュール
 OpenAI APIを使用して画像を評価する機能を提供します。
+並列処理を使用して大量の画像を効率的に評価します。
 """
 
 import base64
 import io
-from typing import List, Dict, Any, Tuple
+import json
 import time
+import concurrent.futures
+from typing import List, Dict, Any, Tuple
 from PIL import Image
 from openai import OpenAI
 from tqdm import tqdm
@@ -30,16 +33,48 @@ class ImageEvaluator:
         self.client = OpenAI(api_key=self.api_key)
         logger.info("OpenAI APIクライアントを初期化しました")
         
-    def _encode_image(self, image: Image.Image) -> str:
+    def _resize_image(self, image: Image.Image, max_size: int = 1024) -> Image.Image:
+        """
+        画像を適切なサイズにリサイズする
+        
+        Args:
+            image: PILのImageオブジェクト
+            max_size: 最大サイズ（幅または高さ）
+            
+        Returns:
+            Image.Image: リサイズされた画像
+        """
+        width, height = image.size
+        
+        # すでに十分小さい場合はリサイズしない
+        if width <= max_size and height <= max_size:
+            return image
+            
+        # アスペクト比を維持してリサイズ
+        if width > height:
+            new_width = max_size
+            new_height = int(height * (max_size / width))
+        else:
+            new_height = max_size
+            new_width = int(width * (max_size / height))
+            
+        return image.resize((new_width, new_height), Image.LANCZOS)
+        
+    def _encode_image(self, image: Image.Image, resize: bool = True) -> str:
         """
         画像をbase64エンコードする
         
         Args:
             image: PILのImageオブジェクト
+            resize: リサイズするかどうか
             
         Returns:
             str: base64エンコードされた画像データ
         """
+        # 必要に応じてリサイズ
+        if resize:
+            image = self._resize_image(image)
+            
         # RGBAモードの場合はRGBに変換（JPEGはアルファチャンネルをサポートしていないため）
         if image.mode == 'RGBA':
             # 白い背景に画像を合成
@@ -50,9 +85,9 @@ class ImageEvaluator:
             # その他のモード（グレースケールなど）もRGBに変換
             image = image.convert('RGB')
             
-        # 画像をJPEGフォーマットのバイトデータに変換
+        # 画像をJPEGフォーマットのバイトデータに変換（品質を少し下げてサイズを小さくする）
         buffer = io.BytesIO()
-        image.save(buffer, format="JPEG", quality=95)
+        image.save(buffer, format="JPEG", quality=85)
         buffer.seek(0)
         
         # base64エンコード
@@ -148,31 +183,82 @@ class ImageEvaluator:
             image_info['is_good'] = False
             return image_info
             
-    def evaluate_images(self, images: List[Dict[str, Any]], rate_limit: int = 10) -> List[Dict[str, Any]]:
+    def _evaluate_batch(self, batch: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        複数の画像を評価する
+        バッチ単位で画像を評価する（並列処理用）
         
         Args:
-            images: 画像情報のリスト
-            rate_limit: APIリクエストの1分あたりの最大数
+            batch: 評価する画像情報のバッチ
             
         Returns:
             List[Dict[str, Any]]: 評価結果を含む画像情報のリスト
         """
         results = []
-        
-        # レート制限を考慮して画像を評価
-        for i, image_info in enumerate(tqdm(images, desc="画像評価中")):
-            # レート制限に達した場合は待機
-            if i > 0 and i % rate_limit == 0:
-                logger.info(f"APIレート制限のため60秒待機します（{i}/{len(images)}）")
-                time.sleep(60)
-                
-            result = self.evaluate_image(image_info)
-            results.append(result)
-            
-        # 良い写真の数をカウント
-        good_images = [img for img in results if img.get('is_good', False)]
-        logger.info(f"評価完了: 合計{len(results)}枚中{len(good_images)}枚が良い写真と判断されました")
-        
+        for image_info in batch:
+            try:
+                result = self.evaluate_image(image_info)
+                results.append(result)
+                # APIレート制限を考慮して少し待機
+                time.sleep(0.5)
+            except Exception as e:
+                logger.error(f"バッチ処理中にエラーが発生しました: {str(e)}")
+                image_info['evaluation'] = None
+                image_info['score'] = 0
+                image_info['is_good'] = False
+                results.append(image_info)
         return results
+        
+    def evaluate_images(self, images: List[Dict[str, Any]], max_workers: int = 4, batch_size: int = 10) -> List[Dict[str, Any]]:
+        """
+        複数の画像を並列処理で評価する
+        
+        Args:
+            images: 画像情報のリスト
+            max_workers: 並列処理の最大ワーカー数
+            batch_size: 一度に処理するバッチサイズ
+            
+        Returns:
+            List[Dict[str, Any]]: 評価結果を含む画像情報のリスト
+        """
+        if not images:
+            return []
+            
+        # 画像の総数を表示
+        total_images = len(images)
+        logger.info(f"合計{total_images}枚の画像を評価します（並列処理: {max_workers}ワーカー）")
+        
+        # バッチに分割
+        batches = []
+        for i in range(0, len(images), batch_size):
+            batches.append(images[i:i+batch_size])
+            
+        results = []
+        
+        # 並列処理でバッチを評価
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # バッチごとに並列処理を実行
+            futures = [executor.submit(self._evaluate_batch, batch) for batch in batches]
+            
+            # 進捗状況を表示しながら結果を取得
+            for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="バッチ処理中"):
+                batch_results = future.result()
+                results.extend(batch_results)
+                
+        # 結果を整理（元の順序を維持）
+        sorted_results = []
+        result_dict = {id(img): img for img in results}
+        for img in images:
+            if id(img) in result_dict:
+                sorted_results.append(result_dict[id(img)])
+            else:
+                # 何らかの理由で結果が見つからない場合
+                img['evaluation'] = None
+                img['score'] = 0
+                img['is_good'] = False
+                sorted_results.append(img)
+                
+        # 良い写真の数をカウント
+        good_images = [img for img in sorted_results if img.get('is_good', False)]
+        logger.info(f"評価完了: 合計{len(sorted_results)}枚中{len(good_images)}枚が良い写真と判断されました")
+        
+        return sorted_results

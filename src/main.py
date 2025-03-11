@@ -58,20 +58,51 @@ def parse_arguments():
         help=f'監視モード時のチェック間隔（秒）（デフォルト: {WATCH_INTERVAL}秒）'
     )
     
+    # 並列処理のオプションを追加
+    parser.add_argument(
+        '--workers', '-W',
+        type=int,
+        default=4,
+        help='並列処理の最大ワーカー数（デフォルト: 4）'
+    )
+    
+    parser.add_argument(
+        '--batch-size', '-b',
+        type=int,
+        default=10,
+        help='一度に処理するバッチサイズ（デフォルト: 10）'
+    )
+    
+    parser.add_argument(
+        '--resize', '-r',
+        type=int,
+        default=1024,
+        help='画像の最大サイズ（幅または高さ）（デフォルト: 1024ピクセル）'
+    )
+    
     return parser.parse_args()
 
-def evaluate_photos(folder_path: Path, max_files: Optional[int] = None) -> Dict[str, Any]:
+def evaluate_photos(
+    folder_path: Path, 
+    max_files: Optional[int] = None,
+    max_workers: int = 4,
+    batch_size: int = 10,
+    resize_max: int = 1024
+) -> Dict[str, Any]:
     """
     指定されたフォルダ内の写真を評価する
     
     Args:
         folder_path: 写真フォルダのパス
         max_files: 評価する最大ファイル数
+        max_workers: 並列処理の最大ワーカー数
+        batch_size: 一度に処理するバッチサイズ
+        resize_max: 画像の最大サイズ（幅または高さ）
         
     Returns:
         Dict[str, Any]: 評価結果の概要
     """
-    logger.info("写真評価を開始します")
+    logger.info(f"写真評価を開始します（並列処理: {max_workers}ワーカー、バッチサイズ: {batch_size}）")
     
     # 画像の読み込み
     loader = ImageLoader(folder_path)
@@ -84,7 +115,10 @@ def evaluate_photos(folder_path: Path, max_files: Optional[int] = None) -> Dict[
     # 画像の評価
     try:
         evaluator = ImageEvaluator()
-        evaluated_images = evaluator.evaluate_images(images)
+        # リサイズの最大サイズを設定
+        evaluator._resize_image = lambda img, _: evaluator._resize_image(img, resize_max)
+        # 並列処理で評価
+        evaluated_images = evaluator.evaluate_images(images, max_workers=max_workers, batch_size=batch_size)
     except Exception as e:
         logger.error(f"画像評価中にエラーが発生しました: {str(e)}")
         return {"status": "error", "message": f"画像評価中にエラーが発生しました: {str(e)}"}
@@ -172,7 +206,13 @@ def main():
         watch_folder(folder_path, args.interval, args.max)
     else:
         # 通常モード: 一度だけ評価を実行
-        results = evaluate_photos(folder_path, args.max)
+        results = evaluate_photos(
+            folder_path, 
+            args.max,
+            max_workers=args.workers,
+            batch_size=args.batch_size,
+            resize_max=args.resize
+        )
         
         if results.get("status") == "success":
             print("\n=== 評価結果 ===")
