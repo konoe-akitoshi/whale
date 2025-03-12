@@ -113,40 +113,77 @@ class ImageEvaluator:
         encoded_image = base64.b64encode(buffer.getvalue()).decode('utf-8')
         return encoded_image
         
-    def _get_evaluation_prompt(self) -> str:
+    def _get_evaluation_prompt(self, api_type: str = None) -> str:
         """
         評価用のプロンプトを取得する
         
+        Args:
+            api_type: APIタイプ（'openai'または'ollama'）
+            
         Returns:
             str: 評価用のプロンプト
         """
-        return """
-        あなたは写真の品質を評価する専門家です。
-        与えられた写真を以下の観点から1〜10の数値で評価してください：
+        # 使用するAPIタイプ（指定がなければインスタンスのAPIタイプを使用）
+        api_type = api_type or self.api_type
         
-        1. 構図（バランス、フレーミング、視線誘導）
-        2. 露出（明るさ、コントラスト、ダイナミックレンジ）
-        3. 色彩（色のバランス、彩度、色温度）
-        4. 焦点（シャープネス、被写界深度、ボケ具合）
-        5. 被写体（主題の明確さ、表現力、魅力）
-        6. 全体的な印象（感情的なインパクト、記憶に残るか）
-        
-        また、総合評価（1〜10）も提供し、写真の強みと改善点を簡潔に説明してください。
-        
-        回答は必ず以下のJSON形式で返してください：
-        {
-            "composition": 数値,
-            "exposure": 数値,
-            "color": 数値,
-            "focus": 数値,
-            "subject": 数値,
-            "overall_impression": 数値,
-            "total_score": 数値,
-            "strengths": "写真の強み",
-            "improvements": "改善点",
-            "description": "写真の簡潔な説明"
-        }
-        """
+        # Ollamaの場合は英語のプロンプトを返す
+        if api_type == 'ollama':
+            return """
+            You are an expert in evaluating photo quality.
+            Please evaluate the given photo on a scale of 1-10 based on the following aspects:
+            
+            1. Composition (balance, framing, visual flow)
+            2. Exposure (brightness, contrast, dynamic range)
+            3. Color (color balance, saturation, color temperature)
+            4. Focus (sharpness, depth of field, bokeh quality)
+            5. Subject (clarity of subject, expressiveness, appeal)
+            6. Overall impression (emotional impact, memorability)
+            
+            Also, provide an overall rating (1-10) and briefly explain the strengths and areas for improvement of the photo.
+            
+            Please respond in the following JSON format:
+            {
+                "composition": number,
+                "exposure": number,
+                "color": number,
+                "focus": number,
+                "subject": number,
+                "overall_impression": number,
+                "total_score": number,
+                "strengths": "strengths of the photo",
+                "improvements": "areas for improvement",
+                "description": "brief description of the photo"
+            }
+            """
+        # OpenAIの場合は日本語のプロンプトを返す
+        else:
+            return """
+            あなたは写真の品質を評価する専門家です。
+            与えられた写真を以下の観点から1〜10の数値で評価してください：
+            
+            1. 構図（バランス、フレーミング、視線誘導）
+            2. 露出（明るさ、コントラスト、ダイナミックレンジ）
+            3. 色彩（色のバランス、彩度、色温度）
+            4. 焦点（シャープネス、被写界深度、ボケ具合）
+            5. 被写体（主題の明確さ、表現力、魅力）
+            6. 全体的な印象（感情的なインパクト、記憶に残るか）
+            
+            また、総合評価（1〜10）も提供し、写真の強みと改善点を簡潔に説明してください。
+            
+            回答は必ず以下のJSON形式で返してください：
+            {
+                "composition": 数値,
+                "exposure": 数値,
+                "color": 数値,
+                "focus": 数値,
+                "subject": 数値,
+                "overall_impression": 数値,
+                "total_score": 数値,
+                "strengths": "写真の強み",
+                "improvements": "改善点",
+                "description": "写真の簡潔な説明"
+            }
+            """
     
     def _evaluate_with_openai(self, image_info: Dict[str, Any], encoded_image: str) -> Dict[str, Any]:
         """
