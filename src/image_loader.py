@@ -177,6 +177,31 @@ class WebDAVImageLoader:
         
         logger.info(f'WebDAVサーバー: {cleaned_url}, リモートパス: {self.remote_path}')
         
+    def _download_file_method(self, remote_path: str, local_path: str) -> None:
+        """
+        WebDAVサーバーからファイルをダウンロードする（download_fileメソッドを使用）
+        
+        Args:
+            remote_path: リモートファイルのパス
+            local_path: ローカルファイルのパス
+        """
+        self.client.download_file(remote_path, local_path)
+        
+    def _download_binary_method(self, remote_path: str, local_path: str) -> None:
+        """
+        WebDAVサーバーからファイルをダウンロードする（download_binaryメソッドを使用）
+        
+        Args:
+            remote_path: リモートファイルのパス
+            local_path: ローカルファイルのパス
+        """
+        # download_binaryメソッドを使用してファイルをダウンロード
+        binary_data = self.client.resource(remote_path).get()
+        
+        # バイナリデータをファイルに書き込む
+        with open(local_path, 'wb') as f:
+            f.write(binary_data)
+        
     def _list_directory(self, path: str, recursive: bool = True) -> List[Dict[str, Any]]:
         """
         WebDAVサーバー上のディレクトリをリストアップする
@@ -357,24 +382,40 @@ class WebDAVImageLoader:
                     
                     # WebDAVサーバーからファイルをダウンロード
                     try:
-                        # まず一時ファイルにダウンロードを試みる
-                        self.client.download_file(file_path, temp_file)
-                        img = Image.open(temp_file)
-                        file_size = os.path.getsize(temp_file)
+                        # 複数の方法を試す
+                        download_methods = [
+                            # 方法1: download_file
+                            lambda: self._download_file_method(file_path, temp_file),
+                            # 方法2: download_binary
+                            lambda: self._download_binary_method(file_path, temp_file),
+                            # 方法3: パスを修正してdownload_file
+                            lambda: self._download_file_method('/' + file_path.lstrip('/'), temp_file),
+                            # 方法4: パスを修正してdownload_binary
+                            lambda: self._download_binary_method('/' + file_path.lstrip('/'), temp_file),
+                            # 方法5: パスからoriginalsを削除
+                            lambda: self._download_file_method(file_path.replace('/originals', ''), temp_file),
+                        ]
+                        
+                        # 各方法を順番に試す
+                        success = False
+                        for i, method in enumerate(download_methods):
+                            try:
+                                method()
+                                img = Image.open(temp_file)
+                                file_size = os.path.getsize(temp_file)
+                                logger.info(f'方法{i+1}でダウンロードに成功しました: {file_path}')
+                                success = True
+                                break
+                            except Exception as e:
+                                logger.warning(f'方法{i+1}でのダウンロードに失敗しました: {file_path} - {str(e)}')
+                                continue
+                                
+                        if not success:
+                            raise Exception("すべてのダウンロード方法が失敗しました")
+                            
                     except Exception as download_error:
-                        logger.warning(f'ファイルへのダウンロードに失敗しました、バッファを使用します: {str(download_error)}')
-                        # 失敗した場合はバッファを使用
-                        buffer = io.BytesIO()
-                        self.client.download_to(file_path, buffer)
-                        buffer.seek(0)
-                        
-                        # PILで画像を開く
-                        img = Image.open(buffer)
-                        
-                        # ファイルサイズを取得
-                        buffer.seek(0, io.SEEK_END)
-                        file_size = buffer.tell()
-                        buffer.seek(0)
+                        logger.error(f'ファイルのダウンロードに失敗しました: {file_path} - {str(download_error)}')
+                        continue  # 次のファイルへ
                     
                     image_info = {
                         'path': file_path,
