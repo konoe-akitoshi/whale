@@ -538,12 +538,13 @@ class WebDAVImageLoader:
             logger.error(f'WebDAVサーバーからファイルリストの取得に失敗しました: {str(e)}')
             return []
             
-    def load_images(self, max_files: int = None) -> List[Dict[str, Any]]:
+    def load_images(self, max_files: int = None, batch_size: int = 100) -> List[Dict[str, Any]]:
         """
         WebDAVサーバーから画像ファイルを読み込み、メタデータとともに返す
         
         Args:
             max_files: 読み込む最大ファイル数（Noneの場合は制限なし）
+            batch_size: 一度に処理するファイル数のバッチサイズ
             
         Returns:
             List[Dict[str, Any]]: 画像情報のリスト
@@ -561,57 +562,89 @@ class WebDAVImageLoader:
             image_files = image_files[:max_files]
             
         images = []
+        total_files = len(image_files)
         
-        # 一時ディレクトリを作成
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # プログレスバーを表示しながら画像を読み込む
-            for file_path in tqdm(
-                image_files, 
-                desc="WebDAVから画像読み込み中", 
-                unit="枚",
-                colour="GREEN",  # Trueの代わりに有効な色を指定
-                ncols=100,
-                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]"
-            ):
-                try:
-                    # ファイル名を取得
-                    filename = os.path.basename(file_path)
-                    
-                    # 一時ファイルパスを作成
-                    temp_file = os.path.join(temp_dir, filename)
-                    
-                    # WebDAVサーバーからファイルをダウンロード
+        # バッチ処理のためにファイルリストを分割
+        batches = []
+        for i in range(0, total_files, batch_size):
+            batches.append(image_files[i:i+batch_size])
+            
+        logger.info(f'WebDAVサーバーから画像を読み込みます: 合計{total_files}枚、{len(batches)}バッチ')
+        
+        # バッチごとに処理
+        for batch_index, batch_files in enumerate(batches):
+            logger.info(f'バッチ {batch_index+1}/{len(batches)} を処理中 ({len(batch_files)}枚)')
+            
+            # 一時ディレクトリを作成（バッチごとに新しいディレクトリを使用）
+            with tempfile.TemporaryDirectory() as temp_dir:
+                # プログレスバーを表示しながら画像を読み込む
+                for file_path in tqdm(
+                    batch_files, 
+                    desc=f"WebDAVから画像読み込み中", 
+                    unit="枚",
+                    colour="GREEN",
+                    ncols=100,
+                    bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]"
+                ):
                     try:
-                        # フィードバックから、方法2が成功していることがわかったので、最初に試す
+                        # ファイル名を取得
+                        filename = os.path.basename(file_path)
+                        
+                        # 一時ファイルパスを作成
+                        temp_file = os.path.join(temp_dir, filename)
+                        
+                        # WebDAVサーバーからファイルをダウンロード
                         try:
-                            self._download_binary_method(file_path, temp_file)
-                            img = Image.open(temp_file)
-                            file_size = os.path.getsize(temp_file)
-                            logger.info(f'ダウンロードに成功しました: {file_path}')
-                        except Exception as e:
-                            logger.warning(f'バイナリダウンロードに失敗しました: {str(e)}')
-                            # 代替方法を試す
-                            self._try_alternative_download(file_path, temp_file)
-                            img = Image.open(temp_file)
-                            file_size = os.path.getsize(temp_file)
-                            
-                    except Exception as download_error:
-                        logger.error(f'ファイルのダウンロードに失敗しました: {file_path} - {str(download_error)}')
-                        continue  # 次のファイルへ
-                    
-                    image_info = {
-                        'path': file_path,
-                        'filename': filename,
-                        'size': file_size,
-                        'dimensions': img.size,
-                        'format': img.format,
-                        'image': img
-                    }
-                    
-                    images.append(image_info)
-                    
-                except Exception as e:
-                    logger.error(f'WebDAVサーバーからの画像の読み込みに失敗しました: {file_path} - {str(e)}')
+                            # フィードバックから、方法2が成功していることがわかったので、最初に試す
+                            try:
+                                self._download_binary_method(file_path, temp_file)
+                                with Image.open(temp_file) as img:
+                                    # 画像情報を取得
+                                    file_size = os.path.getsize(temp_file)
+                                    dimensions = img.size
+                                    format_name = img.format
+                                    # 画像をコピーして保持（元のファイルハンドルは閉じる）
+                                    img_copy = img.copy()
+                                logger.info(f'ダウンロードに成功しました: {file_path}')
+                            except Exception as e:
+                                logger.warning(f'バイナリダウンロードに失敗しました: {str(e)}')
+                                # 代替方法を試す
+                                self._try_alternative_download(file_path, temp_file)
+                                with Image.open(temp_file) as img:
+                                    # 画像情報を取得
+                                    file_size = os.path.getsize(temp_file)
+                                    dimensions = img.size
+                                    format_name = img.format
+                                    # 画像をコピーして保持（元のファイルハンドルは閉じる）
+                                    img_copy = img.copy()
+                                
+                        except Exception as download_error:
+                            logger.error(f'ファイルのダウンロードに失敗しました: {file_path} - {str(download_error)}')
+                            continue  # 次のファイルへ
+                        
+                        # 一時ファイルを明示的に削除（ファイルハンドルを閉じた後）
+                        try:
+                            os.remove(temp_file)
+                        except Exception:
+                            pass  # 削除に失敗しても続行
+                        
+                        image_info = {
+                            'path': file_path,
+                            'filename': filename,
+                            'size': file_size,
+                            'dimensions': dimensions,
+                            'format': format_name,
+                            'image': img_copy
+                        }
+                        
+                        images.append(image_info)
+                        
+                    except Exception as e:
+                        logger.error(f'WebDAVサーバーからの画像の読み込みに失敗しました: {file_path} - {str(e)}')
+                
+                # バッチ処理後にガベージコレクションを実行
+                import gc
+                gc.collect()
                     
         logger.info(f'WebDAVサーバーから読み込んだ画像数: {len(images)}')
         return images
