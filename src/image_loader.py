@@ -86,7 +86,7 @@ class ImageLoader:
             image_files, 
             desc="画像読み込み中", 
             unit="枚",
-            colour=True,
+            colour="GREEN",  # Trueの代わりに有効な色を指定
             ncols=100,
             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]"
         ):
@@ -223,28 +223,26 @@ class WebDAVImageLoader:
             local_path: ローカルファイルのパス
         """
         try:
-            # 複数の方法を試す
+            # 複数の方法を試す（成功する可能性の高い順）
             methods = [
-                # 方法1: resource().get()を使用
-                lambda: self._try_resource_get(remote_path, local_path),
-                # 方法2: バッファを使用
+                # 方法1: バッファを使用（フィードバックから最も成功率が高い）
                 lambda: self._try_buffer_download(remote_path, local_path),
+                # 方法2: 別のパスパターンでバッファを使用
+                lambda: self._try_buffer_download('/' + remote_path.lstrip('/'), local_path),
                 # 方法3: 直接ファイルにダウンロード
                 lambda: self.client.download_file(remote_path, local_path),
                 # 方法4: 別のパスパターンでダウンロード
                 lambda: self.client.download_file('/' + remote_path.lstrip('/'), local_path),
-                # 方法5: 別のパスパターンでバッファを使用
-                lambda: self._try_buffer_download('/' + remote_path.lstrip('/'), local_path),
             ]
             
             # 各方法を順番に試す
-            for i, method in enumerate(methods):
+            for method in methods:
                 try:
                     method()
                     # 成功したら終了
                     return
-                except Exception as e:
-                    logger.warning(f'バイナリダウンロード方法{i+1}が失敗しました: {str(e)}')
+                except Exception:
+                    # エラーは無視して次の方法を試す
                     continue
                     
             # すべての方法が失敗した場合
@@ -297,8 +295,9 @@ class WebDAVImageLoader:
                 # download_fileメソッドを使用
                 self.client.download_file(remote_path, local_path)
                 return
-            except Exception as e:
-                logger.warning(f'download_fileメソッドでのダウンロードに失敗しました: {str(e)}')
+            except Exception:
+                # エラーは無視して次の方法を試す
+                pass
                 
             # 別の方法を試す: バイナリデータとして読み込む
             try:
@@ -309,8 +308,9 @@ class WebDAVImageLoader:
                     with open(local_path, 'wb') as f:
                         f.write(binary_data)
                     return
-            except Exception as e:
-                logger.warning(f'read_binaryメソッドでのダウンロードに失敗しました: {str(e)}')
+            except Exception:
+                # エラーは無視して次の方法を試す
+                pass
                 
             # 別の方法を試す: requestsを使用
             try:
@@ -332,8 +332,9 @@ class WebDAVImageLoader:
                 with open(local_path, 'wb') as f:
                     f.write(response.content)
                 return
-            except Exception as e:
-                logger.warning(f'requestsを使用したダウンロードに失敗しました: {str(e)}')
+            except Exception:
+                # エラーは無視して次の方法を試す
+                pass
                 
             # すべての方法が失敗した場合
             raise Exception("すべてのバッファダウンロード方法が失敗しました")
@@ -388,10 +389,11 @@ class WebDAVImageLoader:
                     with open(local_path, 'wb') as f:
                         f.write(response.content)
                         
-                    logger.info(f'URLパターン{i+1}でダウンロードに成功しました: {url}')
+                    # 成功したURLパターンのみログに記録
+                    logger.info(f'ダウンロードに成功しました: {os.path.basename(remote_path)}')
                     return
-                except Exception as e:
-                    logger.warning(f'URLパターン{i+1}でのダウンロードに失敗しました: {url} - {str(e)}')
+                except Exception:
+                    # エラーは無視して次のパターンを試す
                     continue
                     
             # すべてのURLパターンが失敗した場合
@@ -436,16 +438,16 @@ class WebDAVImageLoader:
                     if files:  # 空でない結果が得られたら成功
                         logger.info(f'方法{i+1}でリスト取得に成功しました: {path}')
                         return files
-                except Exception as e:
-                    logger.warning(f'方法{i+1}でのリスト取得に失敗しました: {path} - {str(e)}')
+                except Exception:
+                    # エラーは無視して次の方法を試す
                     continue
                     
             # すべての方法が失敗した場合
-            logger.error(f'すべての方法でリスト取得に失敗しました: {path}')
+            logger.debug(f'すべての方法でリスト取得に失敗しました: {path}')
             return []
             
         except Exception as e:
-            logger.error(f'ディレクトリのリスト取得に失敗しました: {path} - {str(e)}')
+            logger.debug(f'ディレクトリのリスト取得に失敗しました: {path} - {str(e)}')
             return []
             
     def _list_parent_directory(self, path: str) -> List[Dict[str, Any]]:
@@ -478,8 +480,8 @@ class WebDAVImageLoader:
                         filtered_files.append(file_info)
                         
             return filtered_files
-        except Exception as e:
-            logger.warning(f'親ディレクトリからのリスト取得に失敗しました: {parent_path} - {str(e)}')
+        except Exception:
+            # エラーは無視して空のリストを返す
             return []
     
     def get_image_files(self) -> List[str]:
@@ -567,7 +569,7 @@ class WebDAVImageLoader:
                 image_files, 
                 desc="WebDAVから画像読み込み中", 
                 unit="枚",
-                colour=True,
+                colour="GREEN",  # Trueの代わりに有効な色を指定
                 ncols=100,
                 bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]"
             ):
