@@ -155,7 +155,9 @@ class WebDAVImageLoader:
             'webdav_login': self.username,
             'webdav_password': self.password,
             'webdav_root': self.root_path,
-            'verify': self.verify_ssl
+            'verify': self.verify_ssl,
+            # check()メソッドを無効化
+            'disable_check': True
         }
         
         # デバッグ情報
@@ -171,50 +173,85 @@ class WebDAVImageLoader:
         
         logger.info(f'WebDAVサーバー: {cleaned_url}, リモートパス: {self.remote_path}')
         
+    def _list_directory(self, path: str, recursive: bool = True) -> List[Dict[str, Any]]:
+        """
+        WebDAVサーバー上のディレクトリをリストアップする
+        
+        Args:
+            path: リストアップするディレクトリのパス
+            recursive: 再帰的にリストアップするかどうか
+            
+        Returns:
+            List[Dict[str, Any]]: ファイル情報のリスト
+        """
+        try:
+            # 直接list()を呼び出す
+            try:
+                files = self.client.list(path, get_info=True)
+            except Exception as list_error:
+                logger.warning(f'詳細リスト取得に失敗しました: {path} - {str(list_error)}')
+                # 別の方法を試す
+                try:
+                    # 単純なリスト取得を試みる
+                    files = self.client.list(path)
+                    # 単純なリストの場合は、ファイル名のみが返されるため、辞書形式に変換
+                    files = [{'path': os.path.join(path, f), 'isdir': f.endswith('/')} for f in files]
+                except Exception as simple_list_error:
+                    logger.error(f'単純なリスト取得にも失敗しました: {str(simple_list_error)}')
+                    return []
+                    
+            return files
+        except Exception as e:
+            logger.error(f'ディレクトリのリスト取得に失敗しました: {path} - {str(e)}')
+            return []
+    
     def get_image_files(self) -> List[str]:
         """
-        WebDAVサーバー上の画像ファイルのパスリストを取得
+        WebDAVサーバー上の画像ファイルのパスリストを取得（再帰的）
         
         Returns:
             List[str]: 画像ファイルのパスリスト
         """
         try:
-            # リモートパス内のファイルを再帰的に取得
-            # check()メソッドを使用せず、直接list()を呼び出す
-            try:
-                files = self.client.list(self.remote_path, get_info=True)
-            except Exception as list_error:
-                logger.error(f'リモートパスのリスト取得に失敗しました: {self.remote_path} - {str(list_error)}')
-                # 別の方法を試す
-                try:
-                    # 単純なリスト取得を試みる
-                    files = self.client.list(self.remote_path)
-                    # 単純なリストの場合は、ファイル名のみが返されるため、辞書形式に変換
-                    files = [{'path': os.path.join(self.remote_path, f), 'isdir': f.endswith('/')} for f in files]
-                except Exception as simple_list_error:
-                    logger.error(f'単純なリスト取得にも失敗しました: {str(simple_list_error)}')
-                    return []
-            
-            # ディレクトリを除外し、サポートされている画像形式のみを抽出
-            image_files = []
-            for file_info in files:
-                # 辞書の場合
-                if isinstance(file_info, dict):
-                    if file_info.get('isdir', False):
-                        continue
-                    file_path = file_info.get('path', '')
-                # 文字列の場合
-                elif isinstance(file_info, str):
-                    if file_info.endswith('/'):
-                        continue
-                    file_path = os.path.join(self.remote_path, file_info)
-                else:
-                    continue
+            # 再帰的にファイルを検索する関数
+            def search_recursively(current_path: str) -> List[str]:
+                result = []
                 
-                _, ext = os.path.splitext(file_path)
-                if ext.lower() in SUPPORTED_EXTENSIONS:
-                    image_files.append(file_path)
+                # 現在のディレクトリのファイルとフォルダをリストアップ
+                items = self._list_directory(current_path)
+                
+                for item in items:
+                    # 辞書の場合
+                    if isinstance(item, dict):
+                        item_path = item.get('path', '')
+                        is_dir = item.get('isdir', False)
+                    # 文字列の場合
+                    elif isinstance(item, str):
+                        item_path = os.path.join(current_path, item)
+                        is_dir = item.endswith('/')
+                    else:
+                        continue
                     
+                    # ディレクトリの場合は再帰的に検索
+                    if is_dir:
+                        # パスの末尾に/がない場合は追加
+                        if not item_path.endswith('/'):
+                            item_path += '/'
+                        # 再帰的に検索
+                        sub_results = search_recursively(item_path)
+                        result.extend(sub_results)
+                    else:
+                        # ファイルの場合は拡張子をチェック
+                        _, ext = os.path.splitext(item_path)
+                        if ext.lower() in SUPPORTED_EXTENSIONS:
+                            result.append(item_path)
+                
+                return result
+            
+            # 再帰的に検索を開始
+            logger.info(f'WebDAVサーバー上のファイルを再帰的に検索します: {self.remote_path}')
+            image_files = search_recursively(self.remote_path)
+            
             logger.info(f'WebDAVサーバー上の画像ファイル数: {len(image_files)}')
             return image_files
             
