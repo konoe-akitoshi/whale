@@ -292,25 +292,113 @@ class WebDAVImageLoader:
             local_path: ローカルファイルのパス
         """
         try:
-            # バッファを作成
-            buffer = io.BytesIO()
-            
-            # download()メソッドが存在するか確認
-            if not hasattr(self.client, 'download'):
-                raise AttributeError("WebDAVクライアントにdownload()メソッドがありません")
+            # 一時ファイルを直接ダウンロード
+            try:
+                # download_fileメソッドを使用
+                self.client.download_file(remote_path, local_path)
+                return
+            except Exception as e:
+                logger.warning(f'download_fileメソッドでのダウンロードに失敗しました: {str(e)}')
                 
-            # ファイルをバッファにダウンロード
-            self.client.download(remote_path, buffer)
-            
-            # バッファの先頭に戻る
-            buffer.seek(0)
-            
-            # ファイルに書き込む
-            with open(local_path, 'wb') as f:
-                f.write(buffer.getvalue())
+            # 別の方法を試す: バイナリデータとして読み込む
+            try:
+                # read_binaryメソッドが存在するか確認
+                if hasattr(self.client, 'read_binary'):
+                    # read_binaryメソッドを使用
+                    binary_data = self.client.read_binary(remote_path)
+                    with open(local_path, 'wb') as f:
+                        f.write(binary_data)
+                    return
+            except Exception as e:
+                logger.warning(f'read_binaryメソッドでのダウンロードに失敗しました: {str(e)}')
+                
+            # 別の方法を試す: requestsを使用
+            try:
+                import requests
+                
+                # WebDAVサーバーのURLを取得
+                webdav_url = self.options.get('webdav_hostname', '')
+                username = self.options.get('webdav_login', '')
+                password = self.options.get('webdav_password', '')
+                
+                # URLを構築
+                url = webdav_url.rstrip('/') + '/' + remote_path.lstrip('/')
+                
+                # Basic認証を使用してリクエスト
+                response = requests.get(url, auth=(username, password), verify=self.verify_ssl)
+                response.raise_for_status()
+                
+                # ファイルに書き込む
+                with open(local_path, 'wb') as f:
+                    f.write(response.content)
+                return
+            except Exception as e:
+                logger.warning(f'requestsを使用したダウンロードに失敗しました: {str(e)}')
+                
+            # すべての方法が失敗した場合
+            raise Exception("すべてのバッファダウンロード方法が失敗しました")
                 
         except Exception as e:
             raise Exception(f'バッファを使用したダウンロードに失敗しました: {str(e)}')
+            
+    def _try_requests_download(self, remote_path: str, local_path: str) -> None:
+        """
+        requestsライブラリを使用してファイルをダウンロードする
+        
+        Args:
+            remote_path: リモートファイルのパス
+            local_path: ローカルファイルのパス
+        """
+        try:
+            import requests
+            
+            # WebDAVサーバーのURLを取得
+            webdav_url = self.options.get('webdav_hostname', '')
+            username = self.options.get('webdav_login', '')
+            password = self.options.get('webdav_password', '')
+            
+            # 複数のURLパターンを試す
+            url_patterns = [
+                # パターン1: 通常のURL
+                webdav_url.rstrip('/') + '/' + remote_path.lstrip('/'),
+                # パターン2: originalsを含むURL
+                webdav_url.rstrip('/') + '/originals/' + remote_path.lstrip('/'),
+                # パターン3: originalsを含まないURL
+                webdav_url.rstrip('/') + '/' + remote_path.replace('/originals', '').lstrip('/'),
+                # パターン4: smb/Photoを含まないURL
+                webdav_url.rstrip('/') + '/' + remote_path.replace('/smb/Photo', '').lstrip('/'),
+                # パターン5: originalsとsmb/Photoの両方を含まないURL
+                webdav_url.rstrip('/') + '/' + remote_path.replace('/originals', '').replace('/smb/Photo', '').lstrip('/'),
+                # パターン6: ファイル名のみのURL
+                webdav_url.rstrip('/') + '/' + os.path.basename(remote_path),
+                # パターン7: 年月日フォルダを含むURL
+                webdav_url.rstrip('/') + '/2025/2025-01-01/' + os.path.basename(remote_path),
+                # パターン8: 年フォルダのみを含むURL
+                webdav_url.rstrip('/') + '/2025/' + os.path.basename(remote_path),
+            ]
+            
+            # 各URLパターンを順番に試す
+            for i, url in enumerate(url_patterns):
+                try:
+                    # Basic認証を使用してリクエスト
+                    response = requests.get(url, auth=(username, password), verify=self.verify_ssl, timeout=30)
+                    response.raise_for_status()
+                    
+                    # ファイルに書き込む
+                    with open(local_path, 'wb') as f:
+                        f.write(response.content)
+                        
+                    logger.info(f'URLパターン{i+1}でダウンロードに成功しました: {url}')
+                    return
+                except Exception as e:
+                    logger.warning(f'URLパターン{i+1}でのダウンロードに失敗しました: {url} - {str(e)}')
+                    continue
+                    
+            # すべてのURLパターンが失敗した場合
+            raise Exception("すべてのURLパターンが失敗しました")
+                
+        except Exception as e:
+            raise Exception(f'requestsを使用したダウンロードに失敗しました: {str(e)}')
         
     def _list_directory(self, path: str, recursive: bool = True) -> List[Dict[str, Any]]:
         """
@@ -524,6 +612,16 @@ class WebDAVImageLoader:
                             lambda: self._download_binary_method('/2025/2025-01-01/' + os.path.basename(file_path), temp_file),
                             # 方法15: 年フォルダのみを含むパスを使用
                             lambda: self._download_file_method('/2025/' + os.path.basename(file_path), temp_file),
+                            # 方法16: requestsを使用して直接ダウンロード
+                            lambda: self._try_requests_download(file_path, temp_file),
+                            # 方法17: requestsを使用して直接ダウンロード（パスを修正）
+                            lambda: self._try_requests_download('/' + file_path.lstrip('/'), temp_file),
+                            # 方法18: requestsを使用して直接ダウンロード（ファイル名のみ）
+                            lambda: self._try_requests_download('/' + os.path.basename(file_path), temp_file),
+                            # 方法19: requestsを使用して直接ダウンロード（年月日フォルダ）
+                            lambda: self._try_requests_download('/2025/2025-01-01/' + os.path.basename(file_path), temp_file),
+                            # 方法20: requestsを使用して直接ダウンロード（年フォルダのみ）
+                            lambda: self._try_requests_download('/2025/' + os.path.basename(file_path), temp_file),
                         ]
                         
                         # 各方法を順番に試す
