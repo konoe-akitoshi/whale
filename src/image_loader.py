@@ -140,19 +140,36 @@ class WebDAVImageLoader:
         if not self.webdav_url:
             raise ValueError("WebDAV URLが設定されていません。")
             
+        # URLからユーザー名とパスワードを削除（もし含まれていれば）
+        cleaned_url = self.webdav_url
+        if '@' in cleaned_url and '//' in cleaned_url:
+            # プロトコル部分を取得
+            protocol = cleaned_url.split('//')[0] + '//'
+            # ユーザー名とパスワードを除いた残りの部分を取得
+            remaining = cleaned_url.split('@', 1)[1]
+            cleaned_url = protocol + remaining
+            
         # WebDAVクライアントの設定
         self.options = {
-            'webdav_hostname': self.webdav_url,
+            'webdav_hostname': cleaned_url,
             'webdav_login': self.username,
             'webdav_password': self.password,
             'webdav_root': self.root_path,
             'verify': self.verify_ssl
         }
         
-        # WebDAVクライアントの初期化
-        self.client = WebDAVClient(self.options)
+        # デバッグ情報
+        logger.info(f'WebDAVサーバー接続設定: URL={cleaned_url}, ユーザー名={self.username}, ルートパス={self.root_path}, SSL検証={self.verify_ssl}')
         
-        logger.info(f'WebDAVサーバー: {self.webdav_url}, リモートパス: {self.remote_path}')
+        try:
+            # WebDAVクライアントの初期化
+            self.client = WebDAVClient(self.options)
+            logger.info(f'WebDAVクライアントの初期化に成功しました')
+        except Exception as e:
+            logger.error(f'WebDAVクライアントの初期化に失敗しました: {str(e)}')
+            raise
+        
+        logger.info(f'WebDAVサーバー: {cleaned_url}, リモートパス: {self.remote_path}')
         
     def get_image_files(self) -> List[str]:
         """
@@ -162,21 +179,38 @@ class WebDAVImageLoader:
             List[str]: 画像ファイルのパスリスト
         """
         try:
-            # リモートパスが存在するか確認
-            if not self.client.check(self.remote_path):
-                logger.error(f'リモートパスが存在しません: {self.remote_path}')
-                return []
-                
             # リモートパス内のファイルを再帰的に取得
-            files = self.client.list(self.remote_path, get_info=True)
+            # check()メソッドを使用せず、直接list()を呼び出す
+            try:
+                files = self.client.list(self.remote_path, get_info=True)
+            except Exception as list_error:
+                logger.error(f'リモートパスのリスト取得に失敗しました: {self.remote_path} - {str(list_error)}')
+                # 別の方法を試す
+                try:
+                    # 単純なリスト取得を試みる
+                    files = self.client.list(self.remote_path)
+                    # 単純なリストの場合は、ファイル名のみが返されるため、辞書形式に変換
+                    files = [{'path': os.path.join(self.remote_path, f), 'isdir': f.endswith('/')} for f in files]
+                except Exception as simple_list_error:
+                    logger.error(f'単純なリスト取得にも失敗しました: {str(simple_list_error)}')
+                    return []
             
             # ディレクトリを除外し、サポートされている画像形式のみを抽出
             image_files = []
             for file_info in files:
-                if file_info.get('isdir', True):
+                # 辞書の場合
+                if isinstance(file_info, dict):
+                    if file_info.get('isdir', False):
+                        continue
+                    file_path = file_info.get('path', '')
+                # 文字列の場合
+                elif isinstance(file_info, str):
+                    if file_info.endswith('/'):
+                        continue
+                    file_path = os.path.join(self.remote_path, file_info)
+                else:
                     continue
-                    
-                file_path = file_info.get('path', '')
+                
                 _, ext = os.path.splitext(file_path)
                 if ext.lower() in SUPPORTED_EXTENSIONS:
                     image_files.append(file_path)
@@ -231,16 +265,25 @@ class WebDAVImageLoader:
                     temp_file = os.path.join(temp_dir, filename)
                     
                     # WebDAVサーバーからファイルをダウンロード
-                    buffer = io.BytesIO()
-                    self.client.download_to(file_path, buffer)
-                    buffer.seek(0)
-                    
-                    # PILで画像を開く
-                    img = Image.open(buffer)
-                    
-                    # ファイルサイズを取得
-                    buffer.seek(0, io.SEEK_END)
-                    file_size = buffer.tell()
+                    try:
+                        # まず一時ファイルにダウンロードを試みる
+                        self.client.download_file(file_path, temp_file)
+                        img = Image.open(temp_file)
+                        file_size = os.path.getsize(temp_file)
+                    except Exception as download_error:
+                        logger.warning(f'ファイルへのダウンロードに失敗しました、バッファを使用します: {str(download_error)}')
+                        # 失敗した場合はバッファを使用
+                        buffer = io.BytesIO()
+                        self.client.download_to(file_path, buffer)
+                        buffer.seek(0)
+                        
+                        # PILで画像を開く
+                        img = Image.open(buffer)
+                        
+                        # ファイルサイズを取得
+                        buffer.seek(0, io.SEEK_END)
+                        file_size = buffer.tell()
+                        buffer.seek(0)
                     
                     image_info = {
                         'path': file_path,
