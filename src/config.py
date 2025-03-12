@@ -31,6 +31,13 @@ if not OPENAI_API_KEY:
 OLLAMA_HOST = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
 OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llava')
 
+# WebDAV設定
+WEBDAV_URL = os.getenv('WEBDAV_URL')
+WEBDAV_USERNAME = os.getenv('WEBDAV_USERNAME')
+WEBDAV_PASSWORD = os.getenv('WEBDAV_PASSWORD')
+WEBDAV_ROOT = os.getenv('WEBDAV_ROOT', '/')
+WEBDAV_VERIFY_SSL = os.getenv('WEBDAV_VERIFY_SSL', 'true').lower() == 'true'
+
 # 画像評価設定
 QUALITY_THRESHOLD = float(os.getenv('QUALITY_THRESHOLD', '7.5'))
 # デフォルトのAPI（'openai' または 'ollama'）

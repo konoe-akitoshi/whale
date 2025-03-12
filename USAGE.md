@@ -117,6 +117,38 @@ uv run main.py --folder /path/to/your/photos --api ollama --ollama-model bakllav
 uv run main.py --folder /path/to/your/photos --api ollama --ollama-host http://192.168.1.100:11434
 ```
 
+### WebDAVサーバーから画像を読み込む
+
+WebDAVサーバー上の画像フォルダを評価する場合：
+
+```bash
+# WebDAVサーバー上の画像フォルダを評価
+uv run main.py --webdav /photos
+
+# WebDAVサーバー上の特定のフォルダを評価（最大10枚）
+uv run main.py --webdav /photos/vacation --max 10
+
+# WebDAVサーバー上の画像をOllama Visionで評価
+uv run main.py --webdav /photos --api ollama
+```
+
+WebDAVサーバーの接続情報は、`.env`ファイルで設定します：
+
+```
+WEBDAV_URL=https://your-webdav-server.com
+WEBDAV_USERNAME=your_username
+WEBDAV_PASSWORD=your_password
+WEBDAV_ROOT=/
+WEBDAV_VERIFY_SSL=true
+```
+
+以下のようなWebDAVサーバーに対応しています：
+
+- Nextcloud/ownCloud
+- Box.com
+- Yandex.Disk
+- WebDAVプロトコルをサポートするその他のサーバー
+
 ## 評価結果
 
 評価が完了すると、以下のファイルが生成されます：
@@ -186,3 +218,34 @@ Ollamaの出力からJSONを抽出できませんでした
 - llava
 - bakllava
 - moondream
+
+### WebDAVの接続エラー
+
+```
+WebDAVサーバーからの画像評価中にエラーが発生しました
+```
+
+以下を確認してください：
+1. `.env`ファイルに正しいWebDAV接続情報が設定されているか
+2. WebDAVサーバーが稼働しているか
+3. 指定したリモートパスが存在するか
+4. ユーザー名とパスワードが正しいか
+5. SSL証明書の検証が必要ない場合は`WEBDAV_VERIFY_SSL=false`に設定する
+
+### WebDAVパッケージのインストールエラー
+
+```
+webdavclient3パッケージがインストールされていません
+```
+
+以下のコマンドを実行してWebDAVクライアントパッケージをインストールしてください：
+
+```bash
+uv pip install webdavclient3
+```
+
+または
+
+```bash
+pip install webdavclient3
+```

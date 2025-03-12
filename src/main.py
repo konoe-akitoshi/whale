@@ -35,10 +35,19 @@ def parse_arguments():
         description='OpenAI APIまたはOllama Visionを使用して写真を評価し、高品質な写真を選別するツール'
     )
     
-    parser.add_argument(
+    # 入力ソース（ローカルフォルダまたはWebDAV）
+    source_group = parser.add_mutually_exclusive_group()
+    
+    source_group.add_argument(
         '--folder', '-f',
         type=str,
-        help='評価する写真が含まれるフォルダのパス'
+        help='評価する写真が含まれるローカルフォルダのパス'
+    )
+    
+    source_group.add_argument(
+        '--webdav', '-d',
+        type=str,
+        help='WebDAVサーバー上の画像フォルダのパス'
     )
     
     parser.add_argument(
@@ -234,21 +243,86 @@ def watch_folder(folder_path: Path, interval: int, max_files: Optional[int] = No
     
     observer.join()
 
+def evaluate_webdav_photos(
+    remote_path: str,
+    max_files: Optional[int] = None,
+    max_workers: int = 4,
+    batch_size: int = 10,
+    resize_max: int = 1024,
+    api_type: str = 'openai',
+    ollama_host: str = None,
+    ollama_model: str = None
+) -> Dict[str, Any]:
+    """
+    WebDAVサーバー上の写真を評価する
+    
+    Args:
+        remote_path: WebDAVサーバー上の画像フォルダのパス
+        max_files: 評価する最大ファイル数
+        max_workers: 並列処理の最大ワーカー数
+        batch_size: 一度に処理するバッチサイズ
+        resize_max: 画像の最大サイズ（幅または高さ）
+        api_type: 使用するAPI（'openai'または'ollama'）
+        ollama_host: OllamaのホストURL
+        ollama_model: Ollamaのモデル名
+        
+    Returns:
+        Dict[str, Any]: 評価結果の概要
+    """
+    from src.image_loader import WebDAVImageLoader, WEBDAV_AVAILABLE
+    
+    if not WEBDAV_AVAILABLE:
+        return {
+            "status": "error", 
+            "message": "webdavclient3パッケージがインストールされていません。pip install webdavclient3 を実行してください。"
+        }
+    
+    api_name = "OpenAI API" if api_type == 'openai' else f"Ollama Vision ({ollama_model})"
+    logger.info(f"WebDAVサーバーから写真評価を開始します（API: {api_name}、並列処理: {max_workers}ワーカー、バッチサイズ: {batch_size}）")
+    
+    try:
+        # WebDAVから画像を読み込む
+        loader = WebDAVImageLoader(remote_path=remote_path)
+        images = loader.load_images(max_files)
+        
+        if not images:
+            logger.info(f"WebDAVサーバー上に評価する画像がありません: {remote_path}")
+            return {"status": "info", "message": "WebDAVサーバー上に評価する画像がありません。"}
+        
+        # 画像の評価
+        evaluator = ImageEvaluator(
+            api_type=api_type,
+            ollama_host=ollama_host,
+            ollama_model=ollama_model
+        )
+        
+        # リサイズの最大サイズを設定（オリジナルの関数を保存）
+        original_resize = evaluator._resize_image
+        evaluator._resize_image = lambda img, max_size=None: original_resize(img, resize_max)
+        
+        # 並列処理で評価
+        evaluated_images = evaluator.evaluate_images(images, max_workers=max_workers, batch_size=batch_size)
+        
+        # 結果の保存
+        result_handler = ResultHandler()
+        results = result_handler.save_results(evaluated_images)
+        
+        logger.info("WebDAVサーバーからの写真評価が完了しました")
+        return results
+        
+    except Exception as e:
+        logger.error(f"WebDAVサーバーからの画像評価中にエラーが発生しました: {str(e)}")
+        return {"status": "error", "message": f"WebDAVサーバーからの画像評価中にエラーが発生しました: {str(e)}"}
+
 def main():
     """メイン関数"""
     # コマンドライン引数の解析
     args = parse_arguments()
     
-    # 画像フォルダの取得
-    folder_path = get_image_folder(args.folder)
-    
-    # 監視モードが指定されている場合
-    if args.watch or WATCH_FOLDER:
-        watch_folder(folder_path, args.interval, args.max)
-    else:
-        # 通常モード: 一度だけ評価を実行
-        results = evaluate_photos(
-            folder_path, 
+    # WebDAVモードが指定されている場合
+    if args.webdav:
+        results = evaluate_webdav_photos(
+            args.webdav,
             args.max,
             max_workers=args.workers,
             batch_size=args.batch_size,
@@ -257,16 +331,38 @@ def main():
             ollama_host=args.ollama_host,
             ollama_model=args.ollama_model
         )
+    else:
+        # ローカルフォルダモード
+        # 画像フォルダの取得
+        folder_path = get_image_folder(args.folder)
         
-        if results.get("status") == "success":
-            print("\n=== 評価結果 ===")
-            print(f"合計写真数: {results.get('total_images', 0)}")
-            print(f"良い写真数: {results.get('good_images', 0)}")
-            print(f"結果フォルダ: {results.get('result_folder', '')}")
-            print(f"良い写真フォルダ: {results.get('good_photos_folder', '')}")
-            print(f"サマリーレポート: {results.get('summary_report', '')}")
+        # 監視モードが指定されている場合
+        if args.watch or WATCH_FOLDER:
+            watch_folder(folder_path, args.interval, args.max)
+            return  # 監視モードの場合は結果表示をスキップ
         else:
-            print(f"\nエラー: {results.get('message', '不明なエラー')}")
+            # 通常モード: 一度だけ評価を実行
+            results = evaluate_photos(
+                folder_path, 
+                args.max,
+                max_workers=args.workers,
+                batch_size=args.batch_size,
+                resize_max=args.resize,
+                api_type=args.api,
+                ollama_host=args.ollama_host,
+                ollama_model=args.ollama_model
+            )
+    
+    # 結果の表示（WebDAVモードとローカルフォルダモードの両方で使用）
+    if results.get("status") == "success":
+        print("\n=== 評価結果 ===")
+        print(f"合計写真数: {results.get('total_images', 0)}")
+        print(f"良い写真数: {results.get('good_images', 0)}")
+        print(f"結果フォルダ: {results.get('result_folder', '')}")
+        print(f"良い写真フォルダ: {results.get('good_photos_folder', '')}")
+        print(f"サマリーレポート: {results.get('summary_report', '')}")
+    else:
+        print(f"\nエラー: {results.get('message', '不明なエラー')}")
 
 if __name__ == "__main__":
     main()
