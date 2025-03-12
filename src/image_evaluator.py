@@ -276,22 +276,34 @@ class ImageEvaluator:
                     if field in evaluation_dict:
                         original_value = evaluation_dict[field]
                         
-                        # 文字列の場合は数値に変換
+                        # 値を数値に変換（文字列の場合）
                         if isinstance(original_value, str):
                             try:
                                 # 文字列内の数値部分だけを抽出（例: "8/10" → "8"）
                                 numeric_part = ''.join(c for c in original_value if c.isdigit() or c == '.')
                                 if numeric_part:
                                     evaluation_dict[field] = float(numeric_part)
-                                    # 抽出した数値が10より大きい場合は、10分率に変換（例: 35 → 3.5）
-                                    if evaluation_dict[field] > 10 and evaluation_dict[field] <= 100:
-                                        evaluation_dict[field] /= 10
                                 else:
                                     evaluation_dict[field] = 5  # 数値が見つからない場合
                             except ValueError:
                                 evaluation_dict[field] = 5  # 変換できない場合
                         
-                        # 範囲を1〜10に制限（極端な値の場合のみ）
+                        # 数値型の場合（既に数値になっている場合）
+                        if isinstance(evaluation_dict[field], (int, float)):
+                            # 20〜50の範囲の値は、おそらく0〜100のスケールで評価されているため、10分率に変換
+                            if 20 <= evaluation_dict[field] <= 50:
+                                logger.info(f"10分率に変換: {field}={evaluation_dict[field]} → {evaluation_dict[field]/10}")
+                                evaluation_dict[field] /= 10
+                            # 10より大きく20未満の値も10分率に変換（例: 15 → 1.5）
+                            elif 10 < evaluation_dict[field] < 20:
+                                logger.info(f"10分率に変換: {field}={evaluation_dict[field]} → {evaluation_dict[field]/10}")
+                                evaluation_dict[field] /= 10
+                            # 50より大きい値は100点満点と仮定して10分率に変換
+                            elif evaluation_dict[field] > 50:
+                                logger.info(f"100点満点から10分率に変換: {field}={evaluation_dict[field]} → {evaluation_dict[field]/10}")
+                                evaluation_dict[field] /= 10
+                        
+                        # 範囲を1〜10に制限（変換後も範囲外の場合）
                         if evaluation_dict[field] < 1 or evaluation_dict[field] > 10:
                             logger.warning(f"Ollamaの評価値が範囲外です: {field}={evaluation_dict[field]} (元の値: {original_value})")
                             # 10より大きい場合は10に、1より小さい場合は1に制限
