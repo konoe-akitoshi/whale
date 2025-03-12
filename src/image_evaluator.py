@@ -264,9 +264,9 @@ class ImageEvaluator:
             data = {
                 "model": self.ollama_model,
                 "prompt": f"""
-                {self._get_evaluation_prompt()}
+                {self._get_evaluation_prompt('ollama')}
                 
-                この写真を評価してください:
+                Please evaluate this photo:
                 """,
                 "images": [encoded_image],
                 "stream": False,
