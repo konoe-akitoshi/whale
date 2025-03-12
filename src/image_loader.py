@@ -149,9 +149,17 @@ class WebDAVImageLoader:
             remaining = cleaned_url.split('@', 1)[1]
             cleaned_url = protocol + remaining
             
+        # URLの末尾に/がない場合は追加
+        if not cleaned_url.endswith('/'):
+            cleaned_url += '/'
+            
         # リモートパスの先頭に/がない場合は追加
         if not self.remote_path.startswith('/'):
             self.remote_path = '/' + self.remote_path
+            
+        # リモートパスの末尾に/がない場合は追加（ディレクトリの場合）
+        if not self.remote_path.endswith('/'):
+            self.remote_path += '/'
             
         # WebDAVクライアントの設定
         self.options = {
@@ -161,7 +169,11 @@ class WebDAVImageLoader:
             'webdav_root': '',  # ルートパスは空にして、すべてのパスをremote_pathで指定
             'verify': self.verify_ssl,
             # check()メソッドを無効化
-            'disable_check': True
+            'disable_check': True,
+            # タイムアウトを設定
+            'timeout': 30,
+            # 再試行回数を設定
+            'retry_count': 3
         }
         
         # デバッグ情報
@@ -196,24 +208,94 @@ class WebDAVImageLoader:
             local_path: ローカルファイルのパス
         """
         try:
-            # 方法1: resource().get()を使用
-            try:
-                binary_data = self.client.resource(remote_path).get()
-                with open(local_path, 'wb') as f:
-                    f.write(binary_data)
-                return
-            except Exception as e:
-                logger.warning(f'resource().get()でのダウンロードに失敗しました: {str(e)}')
+            # 複数の方法を試す
+            methods = [
+                # 方法1: resource().get()を使用
+                lambda: self._try_resource_get(remote_path, local_path),
+                # 方法2: バッファを使用
+                lambda: self._try_buffer_download(remote_path, local_path),
+                # 方法3: 直接ファイルにダウンロード
+                lambda: self.client.download_file(remote_path, local_path),
+                # 方法4: 別のパスパターンでダウンロード
+                lambda: self.client.download_file('/' + remote_path.lstrip('/'), local_path),
+                # 方法5: 別のパスパターンでバッファを使用
+                lambda: self._try_buffer_download('/' + remote_path.lstrip('/'), local_path),
+            ]
+            
+            # 各方法を順番に試す
+            for i, method in enumerate(methods):
+                try:
+                    method()
+                    # 成功したら終了
+                    return
+                except Exception as e:
+                    logger.warning(f'バイナリダウンロード方法{i+1}が失敗しました: {str(e)}')
+                    continue
+                    
+            # すべての方法が失敗した場合
+            raise Exception("すべてのバイナリダウンロード方法が失敗しました")
                 
-            # 方法2: バッファを使用
+        except Exception as e:
+            raise Exception(f'バイナリダウンロードに失敗しました: {str(e)}')
+            
+    def _try_resource_get(self, remote_path: str, local_path: str) -> None:
+        """
+        resource().get()メソッドを使用してファイルをダウンロードする
+        
+        Args:
+            remote_path: リモートファイルのパス
+            local_path: ローカルファイルのパス
+        """
+        try:
+            # resource()メソッドが存在するか確認
+            if not hasattr(self.client, 'resource'):
+                raise AttributeError("WebDAVクライアントにresource()メソッドがありません")
+                
+            # resource()メソッドを呼び出す
+            resource = self.client.resource(remote_path)
+            
+            # get()メソッドが存在するか確認
+            if not hasattr(resource, 'get'):
+                raise AttributeError("resourceオブジェクトにget()メソッドがありません")
+                
+            # get()メソッドを呼び出す
+            binary_data = resource.get()
+            
+            # ファイルに書き込む
+            with open(local_path, 'wb') as f:
+                f.write(binary_data)
+                
+        except Exception as e:
+            raise Exception(f'resource().get()でのダウンロードに失敗しました: {str(e)}')
+            
+    def _try_buffer_download(self, remote_path: str, local_path: str) -> None:
+        """
+        バッファを使用してファイルをダウンロードする
+        
+        Args:
+            remote_path: リモートファイルのパス
+            local_path: ローカルファイルのパス
+        """
+        try:
+            # バッファを作成
             buffer = io.BytesIO()
+            
+            # download()メソッドが存在するか確認
+            if not hasattr(self.client, 'download'):
+                raise AttributeError("WebDAVクライアントにdownload()メソッドがありません")
+                
+            # ファイルをバッファにダウンロード
             self.client.download(remote_path, buffer)
+            
+            # バッファの先頭に戻る
             buffer.seek(0)
+            
+            # ファイルに書き込む
             with open(local_path, 'wb') as f:
                 f.write(buffer.getvalue())
                 
         except Exception as e:
-            raise Exception(f'バイナリダウンロードに失敗しました: {str(e)}')
+            raise Exception(f'バッファを使用したダウンロードに失敗しました: {str(e)}')
         
     def _list_directory(self, path: str, recursive: bool = True) -> List[Dict[str, Any]]:
         """
