@@ -149,12 +149,16 @@ class WebDAVImageLoader:
             remaining = cleaned_url.split('@', 1)[1]
             cleaned_url = protocol + remaining
             
+        # リモートパスの先頭に/がない場合は追加
+        if not self.remote_path.startswith('/'):
+            self.remote_path = '/' + self.remote_path
+            
         # WebDAVクライアントの設定
         self.options = {
             'webdav_hostname': cleaned_url,
             'webdav_login': self.username,
             'webdav_password': self.password,
-            'webdav_root': self.root_path,
+            'webdav_root': '',  # ルートパスは空にして、すべてのパスをremote_pathで指定
             'verify': self.verify_ssl,
             # check()メソッドを無効化
             'disable_check': True
@@ -185,24 +189,74 @@ class WebDAVImageLoader:
             List[Dict[str, Any]]: ファイル情報のリスト
         """
         try:
-            # 直接list()を呼び出す
-            try:
-                files = self.client.list(path, get_info=True)
-            except Exception as list_error:
-                logger.warning(f'詳細リスト取得に失敗しました: {path} - {str(list_error)}')
-                # 別の方法を試す
+            # パスの正規化
+            if not path.startswith('/'):
+                path = '/' + path
+                
+            # 複数の方法を試す
+            methods = [
+                # 方法1: 通常のlist
+                lambda: self.client.list(path, get_info=True),
+                # 方法2: 単純なlist
+                lambda: [{'path': os.path.join(path, f).replace('\\', '/'), 'isdir': f.endswith('/')} 
+                         for f in self.client.list(path)],
+                # 方法3: ルートからの相対パス
+                lambda: self.client.list('/' + path.lstrip('/'), get_info=True),
+                # 方法4: 親ディレクトリからのリスト
+                lambda: self._list_parent_directory(path)
+            ]
+            
+            # 各方法を順番に試す
+            for i, method in enumerate(methods):
                 try:
-                    # 単純なリスト取得を試みる
-                    files = self.client.list(path)
-                    # 単純なリストの場合は、ファイル名のみが返されるため、辞書形式に変換
-                    files = [{'path': os.path.join(path, f), 'isdir': f.endswith('/')} for f in files]
-                except Exception as simple_list_error:
-                    logger.error(f'単純なリスト取得にも失敗しました: {str(simple_list_error)}')
-                    return []
+                    files = method()
+                    if files:  # 空でない結果が得られたら成功
+                        logger.info(f'方法{i+1}でリスト取得に成功しました: {path}')
+                        return files
+                except Exception as e:
+                    logger.warning(f'方法{i+1}でのリスト取得に失敗しました: {path} - {str(e)}')
+                    continue
                     
-            return files
+            # すべての方法が失敗した場合
+            logger.error(f'すべての方法でリスト取得に失敗しました: {path}')
+            return []
+            
         except Exception as e:
             logger.error(f'ディレクトリのリスト取得に失敗しました: {path} - {str(e)}')
+            return []
+            
+    def _list_parent_directory(self, path: str) -> List[Dict[str, Any]]:
+        """
+        親ディレクトリをリストアップし、指定されたパスのファイルのみをフィルタリングする
+        
+        Args:
+            path: 対象のパス
+            
+        Returns:
+            List[Dict[str, Any]]: ファイル情報のリスト
+        """
+        # 親ディレクトリのパスを取得
+        parent_path = os.path.dirname(path.rstrip('/'))
+        if not parent_path:
+            parent_path = '/'
+            
+        try:
+            # 親ディレクトリのリストを取得
+            parent_files = self.client.list(parent_path, get_info=True)
+            
+            # 対象のパスのファイルのみをフィルタリング
+            target_name = os.path.basename(path.rstrip('/'))
+            filtered_files = []
+            
+            for file_info in parent_files:
+                if isinstance(file_info, dict):
+                    file_path = file_info.get('path', '')
+                    if file_path.endswith(target_name) or file_path.endswith(target_name + '/'):
+                        filtered_files.append(file_info)
+                        
+            return filtered_files
+        except Exception as e:
+            logger.warning(f'親ディレクトリからのリスト取得に失敗しました: {parent_path} - {str(e)}')
             return []
     
     def get_image_files(self) -> List[str]:
