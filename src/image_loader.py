@@ -189,18 +189,31 @@ class WebDAVImageLoader:
         
     def _download_binary_method(self, remote_path: str, local_path: str) -> None:
         """
-        WebDAVサーバーからファイルをダウンロードする（download_binaryメソッドを使用）
+        WebDAVサーバーからファイルをダウンロードする（バイナリデータとして）
         
         Args:
             remote_path: リモートファイルのパス
             local_path: ローカルファイルのパス
         """
-        # download_binaryメソッドを使用してファイルをダウンロード
-        binary_data = self.client.resource(remote_path).get()
-        
-        # バイナリデータをファイルに書き込む
-        with open(local_path, 'wb') as f:
-            f.write(binary_data)
+        try:
+            # 方法1: resource().get()を使用
+            try:
+                binary_data = self.client.resource(remote_path).get()
+                with open(local_path, 'wb') as f:
+                    f.write(binary_data)
+                return
+            except Exception as e:
+                logger.warning(f'resource().get()でのダウンロードに失敗しました: {str(e)}')
+                
+            # 方法2: バッファを使用
+            buffer = io.BytesIO()
+            self.client.download(remote_path, buffer)
+            buffer.seek(0)
+            with open(local_path, 'wb') as f:
+                f.write(buffer.getvalue())
+                
+        except Exception as e:
+            raise Exception(f'バイナリダウンロードに失敗しました: {str(e)}')
         
     def _list_directory(self, path: str, recursive: bool = True) -> List[Dict[str, Any]]:
         """
@@ -394,6 +407,16 @@ class WebDAVImageLoader:
                             lambda: self._download_binary_method('/' + file_path.lstrip('/'), temp_file),
                             # 方法5: パスからoriginalsを削除
                             lambda: self._download_file_method(file_path.replace('/originals', ''), temp_file),
+                            # 方法6: パスからoriginalsを削除し、パスを修正
+                            lambda: self._download_file_method('/' + file_path.replace('/originals', '').lstrip('/'), temp_file),
+                            # 方法7: パスからsmb/Photoを削除
+                            lambda: self._download_file_method(file_path.replace('/smb/Photo', ''), temp_file),
+                            # 方法8: パスからsmb/Photoを削除し、パスを修正
+                            lambda: self._download_file_method('/' + file_path.replace('/smb/Photo', '').lstrip('/'), temp_file),
+                            # 方法9: 直接ファイル名のみを使用
+                            lambda: self._download_file_method('/' + os.path.basename(file_path), temp_file),
+                            # 方法10: 直接ファイル名のみを使用（バイナリ）
+                            lambda: self._download_binary_method('/' + os.path.basename(file_path), temp_file),
                         ]
                         
                         # 各方法を順番に試す
