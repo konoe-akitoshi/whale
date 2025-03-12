@@ -161,9 +161,24 @@ class WebDAVImageLoader:
         if not self.remote_path.endswith('/'):
             self.remote_path += '/'
             
+        # URLに含まれるパスを削除（例：https://photo.akitoshi-lab.com/originals/ -> https://photo.akitoshi-lab.com/）
+        base_url = cleaned_url
+        url_parts = cleaned_url.split('/')
+        if len(url_parts) > 3:  # プロトコル + 空文字 + ドメイン + パス
+            # ドメイン部分までを取得
+            base_url = url_parts[0] + '//' + url_parts[2] + '/'
+            
+        # URLに含まれるパスをリモートパスに追加
+        if len(url_parts) > 3:
+            path_in_url = '/'.join(url_parts[3:-1])  # 最後の空文字を除く
+            if path_in_url:
+                # リモートパスの先頭に追加
+                if not self.remote_path.startswith('/' + path_in_url):
+                    self.remote_path = '/' + path_in_url + self.remote_path
+            
         # WebDAVクライアントの設定
         self.options = {
-            'webdav_hostname': cleaned_url,
+            'webdav_hostname': base_url,  # URLからパスを削除したベースURL
             'webdav_login': self.username,
             'webdav_password': self.password,
             'webdav_root': '',  # ルートパスは空にして、すべてのパスをremote_pathで指定
@@ -499,6 +514,16 @@ class WebDAVImageLoader:
                             lambda: self._download_file_method('/' + os.path.basename(file_path), temp_file),
                             # 方法10: 直接ファイル名のみを使用（バイナリ）
                             lambda: self._download_binary_method('/' + os.path.basename(file_path), temp_file),
+                            # 方法11: originalsとsmb/Photoの両方を削除
+                            lambda: self._download_file_method(file_path.replace('/originals', '').replace('/smb/Photo', ''), temp_file),
+                            # 方法12: originalsとsmb/Photoの両方を削除し、パスを修正
+                            lambda: self._download_file_method('/' + file_path.replace('/originals', '').replace('/smb/Photo', '').lstrip('/'), temp_file),
+                            # 方法13: 年月日フォルダを含むパスを使用
+                            lambda: self._download_file_method('/2025/2025-01-01/' + os.path.basename(file_path), temp_file),
+                            # 方法14: 年月日フォルダを含むパスを使用（バイナリ）
+                            lambda: self._download_binary_method('/2025/2025-01-01/' + os.path.basename(file_path), temp_file),
+                            # 方法15: 年フォルダのみを含むパスを使用
+                            lambda: self._download_file_method('/2025/' + os.path.basename(file_path), temp_file),
                         ]
                         
                         # 各方法を順番に試す
