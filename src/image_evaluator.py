@@ -244,6 +244,9 @@ class ImageEvaluator:
             response_data = response.json()
             result = response_data.get('response', '')
             
+            # デバッグ用にOllamaの生の応答を記録
+            logger.debug(f"Ollamaの生の応答: {result}")
+            
             # JSONを抽出（Ollamaの出力からJSONだけを取り出す）
             try:
                 # JSONの開始と終了を見つける
@@ -252,29 +255,49 @@ class ImageEvaluator:
                 
                 if json_start >= 0 and json_end > json_start:
                     json_str = result[json_start:json_end]
+                    logger.debug(f"抽出されたJSON文字列: {json_str}")
                     evaluation_dict = json.loads(json_str)
                 else:
                     # JSONが見つからない場合、テキスト全体をパースしてみる
                     evaluation_dict = json.loads(result)
                 
+                logger.debug(f"パース後の評価辞書: {evaluation_dict}")
+                
                 # 数値フィールドを確実に数値に変換し、範囲を1〜10に制限する
                 numeric_fields = ["composition", "exposure", "color", "focus", 
                                  "subject", "overall_impression", "total_score"]
                 
+                # 変換前の値をログに記録
                 for field in numeric_fields:
                     if field in evaluation_dict:
-                        # 文字列の場合は数値に変換
-                        if isinstance(evaluation_dict[field], str):
-                            try:
-                                evaluation_dict[field] = float(evaluation_dict[field])
-                            except ValueError:
-                                evaluation_dict[field] = 5  # 変換できない場合はデフォルト値
+                        logger.debug(f"変換前の{field}: {evaluation_dict[field]} (型: {type(evaluation_dict[field]).__name__})")
+                
+                for field in numeric_fields:
+                    if field in evaluation_dict:
+                        original_value = evaluation_dict[field]
                         
-                        # 範囲を1〜10に制限
+                        # 文字列の場合は数値に変換
+                        if isinstance(original_value, str):
+                            try:
+                                # 文字列内の数値部分だけを抽出（例: "8/10" → "8"）
+                                numeric_part = ''.join(c for c in original_value if c.isdigit() or c == '.')
+                                if numeric_part:
+                                    evaluation_dict[field] = float(numeric_part)
+                                    # 抽出した数値が10より大きい場合は、10分率に変換（例: 35 → 3.5）
+                                    if evaluation_dict[field] > 10 and evaluation_dict[field] <= 100:
+                                        evaluation_dict[field] /= 10
+                                else:
+                                    evaluation_dict[field] = 5  # 数値が見つからない場合
+                            except ValueError:
+                                evaluation_dict[field] = 5  # 変換できない場合
+                        
+                        # 範囲を1〜10に制限（極端な値の場合のみ）
                         if evaluation_dict[field] < 1 or evaluation_dict[field] > 10:
-                            logger.warning(f"Ollamaの評価値が範囲外です: {field}={evaluation_dict[field]}")
+                            logger.warning(f"Ollamaの評価値が範囲外です: {field}={evaluation_dict[field]} (元の値: {original_value})")
                             # 10より大きい場合は10に、1より小さい場合は1に制限
                             evaluation_dict[field] = min(max(evaluation_dict[field], 1), 10)
+                        
+                        logger.debug(f"変換後の{field}: {evaluation_dict[field]}")
                 
             except json.JSONDecodeError:
                 # JSONのパースに失敗した場合、デフォルト値を設定
