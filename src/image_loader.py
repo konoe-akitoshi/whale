@@ -580,66 +580,18 @@ class WebDAVImageLoader:
                     
                     # WebDAVサーバーからファイルをダウンロード
                     try:
-                        # 複数の方法を試す
-                        download_methods = [
-                            # 方法1: download_file
-                            lambda: self._download_file_method(file_path, temp_file),
-                            # 方法2: download_binary
-                            lambda: self._download_binary_method(file_path, temp_file),
-                            # 方法3: パスを修正してdownload_file
-                            lambda: self._download_file_method('/' + file_path.lstrip('/'), temp_file),
-                            # 方法4: パスを修正してdownload_binary
-                            lambda: self._download_binary_method('/' + file_path.lstrip('/'), temp_file),
-                            # 方法5: パスからoriginalsを削除
-                            lambda: self._download_file_method(file_path.replace('/originals', ''), temp_file),
-                            # 方法6: パスからoriginalsを削除し、パスを修正
-                            lambda: self._download_file_method('/' + file_path.replace('/originals', '').lstrip('/'), temp_file),
-                            # 方法7: パスからsmb/Photoを削除
-                            lambda: self._download_file_method(file_path.replace('/smb/Photo', ''), temp_file),
-                            # 方法8: パスからsmb/Photoを削除し、パスを修正
-                            lambda: self._download_file_method('/' + file_path.replace('/smb/Photo', '').lstrip('/'), temp_file),
-                            # 方法9: 直接ファイル名のみを使用
-                            lambda: self._download_file_method('/' + os.path.basename(file_path), temp_file),
-                            # 方法10: 直接ファイル名のみを使用（バイナリ）
-                            lambda: self._download_binary_method('/' + os.path.basename(file_path), temp_file),
-                            # 方法11: originalsとsmb/Photoの両方を削除
-                            lambda: self._download_file_method(file_path.replace('/originals', '').replace('/smb/Photo', ''), temp_file),
-                            # 方法12: originalsとsmb/Photoの両方を削除し、パスを修正
-                            lambda: self._download_file_method('/' + file_path.replace('/originals', '').replace('/smb/Photo', '').lstrip('/'), temp_file),
-                            # 方法13: 年月日フォルダを含むパスを使用
-                            lambda: self._download_file_method('/2025/2025-01-01/' + os.path.basename(file_path), temp_file),
-                            # 方法14: 年月日フォルダを含むパスを使用（バイナリ）
-                            lambda: self._download_binary_method('/2025/2025-01-01/' + os.path.basename(file_path), temp_file),
-                            # 方法15: 年フォルダのみを含むパスを使用
-                            lambda: self._download_file_method('/2025/' + os.path.basename(file_path), temp_file),
-                            # 方法16: requestsを使用して直接ダウンロード
-                            lambda: self._try_requests_download(file_path, temp_file),
-                            # 方法17: requestsを使用して直接ダウンロード（パスを修正）
-                            lambda: self._try_requests_download('/' + file_path.lstrip('/'), temp_file),
-                            # 方法18: requestsを使用して直接ダウンロード（ファイル名のみ）
-                            lambda: self._try_requests_download('/' + os.path.basename(file_path), temp_file),
-                            # 方法19: requestsを使用して直接ダウンロード（年月日フォルダ）
-                            lambda: self._try_requests_download('/2025/2025-01-01/' + os.path.basename(file_path), temp_file),
-                            # 方法20: requestsを使用して直接ダウンロード（年フォルダのみ）
-                            lambda: self._try_requests_download('/2025/' + os.path.basename(file_path), temp_file),
-                        ]
-                        
-                        # 各方法を順番に試す
-                        success = False
-                        for i, method in enumerate(download_methods):
-                            try:
-                                method()
-                                img = Image.open(temp_file)
-                                file_size = os.path.getsize(temp_file)
-                                logger.info(f'方法{i+1}でダウンロードに成功しました: {file_path}')
-                                success = True
-                                break
-                            except Exception as e:
-                                logger.warning(f'方法{i+1}でのダウンロードに失敗しました: {file_path} - {str(e)}')
-                                continue
-                                
-                        if not success:
-                            raise Exception("すべてのダウンロード方法が失敗しました")
+                        # フィードバックから、方法2が成功していることがわかったので、最初に試す
+                        try:
+                            self._download_binary_method(file_path, temp_file)
+                            img = Image.open(temp_file)
+                            file_size = os.path.getsize(temp_file)
+                            logger.info(f'ダウンロードに成功しました: {file_path}')
+                        except Exception as e:
+                            logger.warning(f'バイナリダウンロードに失敗しました: {str(e)}')
+                            # 代替方法を試す
+                            self._try_alternative_download(file_path, temp_file)
+                            img = Image.open(temp_file)
+                            file_size = os.path.getsize(temp_file)
                             
                     except Exception as download_error:
                         logger.error(f'ファイルのダウンロードに失敗しました: {file_path} - {str(download_error)}')
@@ -661,3 +613,34 @@ class WebDAVImageLoader:
                     
         logger.info(f'WebDAVサーバーから読み込んだ画像数: {len(images)}')
         return images
+        
+    def _try_alternative_download(self, remote_path: str, local_path: str) -> None:
+        """
+        代替ダウンロード方法を試す
+        
+        Args:
+            remote_path: リモートファイルのパス
+            local_path: ローカルファイルのパス
+        """
+        # 最も成功する可能性の高い方法を優先的に試す
+        download_methods = [
+            # requestsを使用した方法
+            lambda: self._try_requests_download(remote_path, local_path),
+            # パスを修正してバイナリダウンロード
+            lambda: self._download_binary_method('/' + remote_path.lstrip('/'), local_path),
+            # ファイル名のみを使用
+            lambda: self._try_requests_download('/' + os.path.basename(remote_path), local_path),
+            # 年月日フォルダを含むパス
+            lambda: self._try_requests_download('/2025/2025-01-01/' + os.path.basename(remote_path), local_path),
+        ]
+        
+        # 各方法を順番に試す
+        for method in download_methods:
+            try:
+                method()
+                return  # 成功したら終了
+            except Exception:
+                continue  # 次の方法を試す
+                
+        # すべての方法が失敗した場合
+        raise Exception("すべての代替ダウンロード方法が失敗しました")
