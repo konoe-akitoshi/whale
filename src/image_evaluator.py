@@ -256,6 +256,26 @@ class ImageEvaluator:
                 else:
                     # JSONが見つからない場合、テキスト全体をパースしてみる
                     evaluation_dict = json.loads(result)
+                
+                # 数値フィールドを確実に数値に変換し、範囲を1〜10に制限する
+                numeric_fields = ["composition", "exposure", "color", "focus", 
+                                 "subject", "overall_impression", "total_score"]
+                
+                for field in numeric_fields:
+                    if field in evaluation_dict:
+                        # 文字列の場合は数値に変換
+                        if isinstance(evaluation_dict[field], str):
+                            try:
+                                evaluation_dict[field] = float(evaluation_dict[field])
+                            except ValueError:
+                                evaluation_dict[field] = 5  # 変換できない場合はデフォルト値
+                        
+                        # 範囲を1〜10に制限
+                        if evaluation_dict[field] < 1 or evaluation_dict[field] > 10:
+                            logger.warning(f"Ollamaの評価値が範囲外です: {field}={evaluation_dict[field]}")
+                            # 10より大きい場合は10に、1より小さい場合は1に制限
+                            evaluation_dict[field] = min(max(evaluation_dict[field], 1), 10)
+                
             except json.JSONDecodeError:
                 # JSONのパースに失敗した場合、デフォルト値を設定
                 logger.warning(f"Ollamaの出力からJSONを抽出できませんでした: {result}")
