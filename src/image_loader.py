@@ -556,6 +556,21 @@ class WebDAVImageLoader:
                 - format: 画像フォーマット
                 - image: PILのImageオブジェクト
         """
+        # multiprocessingのリソーストラッカーを無効化（セマフォリーク対策）
+        try:
+            import multiprocessing as mp
+            # リソーストラッカーを無効化（環境変数を設定）
+            os.environ["PYTHONMULTIPROCESSING"] = "1"
+            # すでに起動している場合は停止
+            if hasattr(mp, 'resource_tracker') and hasattr(mp.resource_tracker, '_resource_tracker'):
+                if mp.resource_tracker._resource_tracker is not None:
+                    try:
+                        mp.resource_tracker._resource_tracker._stop = True
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+            
         image_files = self.get_image_files()
         
         if max_files is not None:
@@ -571,12 +586,13 @@ class WebDAVImageLoader:
             
         logger.info(f'WebDAVサーバーから画像を読み込みます: 合計{total_files}枚、{len(batches)}バッチ')
         
-        # バッチごとに処理
-        for batch_index, batch_files in enumerate(batches):
-            logger.info(f'バッチ {batch_index+1}/{len(batches)} を処理中 ({len(batch_files)}枚)')
-            
-            # 一時ディレクトリを作成（バッチごとに新しいディレクトリを使用）
-            with tempfile.TemporaryDirectory() as temp_dir:
+        # 一時ディレクトリを作成（すべてのバッチで共有）
+        temp_dir = tempfile.mkdtemp()
+        try:
+            # バッチごとに処理
+            for batch_index, batch_files in enumerate(batches):
+                logger.info(f'バッチ {batch_index+1}/{len(batches)} を処理中 ({len(batch_files)}枚)')
+                
                 # プログレスバーを表示しながら画像を読み込む
                 for file_path in tqdm(
                     batch_files, 
@@ -590,8 +606,8 @@ class WebDAVImageLoader:
                         # ファイル名を取得
                         filename = os.path.basename(file_path)
                         
-                        # 一時ファイルパスを作成
-                        temp_file = os.path.join(temp_dir, filename)
+                        # 一時ファイルパスを作成（ユニークな名前を使用）
+                        temp_file = os.path.join(temp_dir, f"{int(time.time() * 1000)}_{filename}")
                         
                         # WebDAVサーバーからファイルをダウンロード
                         try:
@@ -645,6 +661,14 @@ class WebDAVImageLoader:
                 # バッチ処理後にガベージコレクションを実行
                 import gc
                 gc.collect()
+                
+        finally:
+            # 一時ディレクトリを明示的に削除
+            try:
+                import shutil
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except Exception:
+                pass
                     
         logger.info(f'WebDAVサーバーから読み込んだ画像数: {len(images)}')
         return images
