@@ -7,8 +7,11 @@ OpenAI APIまたはOllama Visionを使用して画像を評価する機能を提
 import base64
 import io
 import json
+import os
 import time
 import requests
+import threading
+import multiprocessing
 import concurrent.futures
 from typing import List, Dict, Any, Tuple, Literal, Optional
 from PIL import Image
@@ -19,6 +22,17 @@ from src.config import (
     OPENAI_API_KEY, OLLAMA_HOST, OLLAMA_MODEL, 
     QUALITY_THRESHOLD, DEFAULT_API, logger
 )
+
+# macOSでのフォークセーフティを無効化
+os.environ["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
+
+# multiprocessingのスタートメソッドを設定
+try:
+    # macOSでは'spawn'を使用
+    if hasattr(multiprocessing, 'set_start_method'):
+        multiprocessing.set_start_method('spawn', force=True)
+except Exception:
+    pass
 
 class ImageEvaluator:
     """OpenAI APIまたはOllama Visionを使用して画像を評価するクラス"""
@@ -469,8 +483,24 @@ class ImageEvaluator:
             
         results = []
         
-        # 並列処理でバッチを評価
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # multiprocessingのリソーストラッカーを無効化（セマフォリーク対策）
+        try:
+            # リソーストラッカーを無効化（環境変数を設定）
+            os.environ["PYTHONMULTIPROCESSING"] = "1"
+            
+            # すでに起動している場合は停止
+            if hasattr(multiprocessing, 'resource_tracker') and hasattr(multiprocessing.resource_tracker, '_resource_tracker'):
+                if multiprocessing.resource_tracker._resource_tracker is not None:
+                    try:
+                        multiprocessing.resource_tracker._resource_tracker._stop = True
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        
+        # スレッドプールを使用して並列処理
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        try:
             # バッチごとに並列処理を実行
             futures = [executor.submit(self._evaluate_batch, batch) for batch in batches]
             
@@ -486,6 +516,13 @@ class ImageEvaluator:
             ):
                 batch_results = future.result()
                 results.extend(batch_results)
+        finally:
+            # 明示的にエグゼキュータをシャットダウン
+            executor.shutdown(wait=True)
+            
+            # ガベージコレクションを実行
+            import gc
+            gc.collect()
                 
         # 結果を整理（元の順序を維持）
         sorted_results = []
