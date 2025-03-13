@@ -314,36 +314,72 @@ def evaluate_webdav_photos(
         logger.error(f"WebDAVサーバーからの画像評価中にエラーが発生しました: {str(e)}")
         return {"status": "error", "message": f"WebDAVサーバーからの画像評価中にエラーが発生しました: {str(e)}"}
 
+def disable_mp_resource_tracker():
+    """multiprocessingのリソーストラッカーを無効化する（セマフォリーク対策）"""
+    try:
+        # macOSでのフォークセーフティを無効化
+        os.environ["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
+        
+        # multiprocessingのリソーストラッカーを無効化
+        import multiprocessing as mp
+        # リソーストラッカーを無効化（環境変数を設定）
+        os.environ["PYTHONMULTIPROCESSING"] = "1"
+        
+        # すでに起動している場合は停止
+        if hasattr(mp, 'resource_tracker') and hasattr(mp.resource_tracker, '_resource_tracker'):
+            if mp.resource_tracker._resource_tracker is not None:
+                try:
+                    mp.resource_tracker._resource_tracker._stop = True
+                    # 明示的にリソーストラッカーを停止
+                    mp.resource_tracker._resource_tracker.join()
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.debug(f"リソーストラッカーの無効化に失敗しました: {str(e)}")
+
+def cleanup_resources():
+    """プログラム終了時にリソースをクリーンアップする"""
+    try:
+        # 一時ディレクトリをクリーンアップ
+        import tempfile
+        import shutil
+        temp_dir = tempfile.gettempdir()
+        for item in os.listdir(temp_dir):
+            item_path = os.path.join(temp_dir, item)
+            try:
+                if os.path.isdir(item_path) and item.startswith('tmp'):
+                    shutil.rmtree(item_path, ignore_errors=True)
+            except Exception:
+                pass
+                
+        # ガベージコレクションを実行
+        import gc
+        gc.collect()
+        
+        # multiprocessingのリソースをクリーンアップ
+        try:
+            import multiprocessing as mp
+            if hasattr(mp, 'util') and hasattr(mp.util, '_cleanup'):
+                mp.util._cleanup()
+        except Exception:
+            pass
+            
+    except Exception as e:
+        logger.debug(f"リソースのクリーンアップに失敗しました: {str(e)}")
+
 def main():
     """メイン関数"""
-    # コマンドライン引数の解析
-    args = parse_arguments()
+    # multiprocessingのリソーストラッカーを無効化
+    disable_mp_resource_tracker()
     
-    # WebDAVモードが指定されている場合
-    if args.webdav:
-        results = evaluate_webdav_photos(
-            args.webdav,
-            args.max,
-            max_workers=args.workers,
-            batch_size=args.batch_size,
-            resize_max=args.resize,
-            api_type=args.api,
-            ollama_host=args.ollama_host,
-            ollama_model=args.ollama_model
-        )
-    else:
-        # ローカルフォルダモード
-        # 画像フォルダの取得
-        folder_path = get_image_folder(args.folder)
+    try:
+        # コマンドライン引数の解析
+        args = parse_arguments()
         
-        # 監視モードが指定されている場合
-        if args.watch or WATCH_FOLDER:
-            watch_folder(folder_path, args.interval, args.max)
-            return  # 監視モードの場合は結果表示をスキップ
-        else:
-            # 通常モード: 一度だけ評価を実行
-            results = evaluate_photos(
-                folder_path, 
+        # WebDAVモードが指定されている場合
+        if args.webdav:
+            results = evaluate_webdav_photos(
+                args.webdav,
                 args.max,
                 max_workers=args.workers,
                 batch_size=args.batch_size,
@@ -352,17 +388,42 @@ def main():
                 ollama_host=args.ollama_host,
                 ollama_model=args.ollama_model
             )
-    
-    # 結果の表示（WebDAVモードとローカルフォルダモードの両方で使用）
-    if results.get("status") == "success":
-        print("\n=== 評価結果 ===")
-        print(f"合計写真数: {results.get('total_images', 0)}")
-        print(f"良い写真数: {results.get('good_images', 0)}")
-        print(f"結果フォルダ: {results.get('result_folder', '')}")
-        print(f"良い写真フォルダ: {results.get('good_photos_folder', '')}")
-        print(f"サマリーレポート: {results.get('summary_report', '')}")
-    else:
-        print(f"\nエラー: {results.get('message', '不明なエラー')}")
+        else:
+            # ローカルフォルダモード
+            # 画像フォルダの取得
+            folder_path = get_image_folder(args.folder)
+            
+            # 監視モードが指定されている場合
+            if args.watch or WATCH_FOLDER:
+                watch_folder(folder_path, args.interval, args.max)
+                return  # 監視モードの場合は結果表示をスキップ
+            else:
+                # 通常モード: 一度だけ評価を実行
+                results = evaluate_photos(
+                    folder_path, 
+                    args.max,
+                    max_workers=args.workers,
+                    batch_size=args.batch_size,
+                    resize_max=args.resize,
+                    api_type=args.api,
+                    ollama_host=args.ollama_host,
+                    ollama_model=args.ollama_model
+                )
+        
+        # 結果の表示（WebDAVモードとローカルフォルダモードの両方で使用）
+        if results.get("status") == "success":
+            print("\n=== 評価結果 ===")
+            print(f"合計写真数: {results.get('total_images', 0)}")
+            print(f"良い写真数: {results.get('good_images', 0)}")
+            print(f"結果フォルダ: {results.get('result_folder', '')}")
+            print(f"良い写真フォルダ: {results.get('good_photos_folder', '')}")
+            print(f"サマリーレポート: {results.get('summary_report', '')}")
+        else:
+            print(f"\nエラー: {results.get('message', '不明なエラー')}")
+            
+    finally:
+        # プログラム終了時にリソースをクリーンアップ
+        cleanup_resources()
 
 if __name__ == "__main__":
     main()
