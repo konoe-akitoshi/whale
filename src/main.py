@@ -4,10 +4,24 @@
 OpenAI APIを使用して、フォルダ内の写真を自動的に評価し、高品質な写真を選別するツール。
 """
 
+# 環境変数を設定（セマフォリーク対策）
 import os
+os.environ["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
+os.environ["PYTHONMULTIPROCESSING"] = "1"
+
+# multiprocessingのスタートメソッドを設定
+import multiprocessing
+try:
+    # macOSでは'spawn'を使用
+    if hasattr(multiprocessing, 'set_start_method'):
+        multiprocessing.set_start_method('spawn', force=True)
+except Exception:
+    pass
+
 import sys
 import argparse
 import time
+import atexit
 from pathlib import Path
 from typing import Dict, Any, Optional
 

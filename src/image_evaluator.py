@@ -482,6 +482,7 @@ class ImageEvaluator:
             batches.append(images[i:i+batch_size])
             
         results = []
+        all_results = []
         
         # multiprocessingのリソーストラッカーを無効化（セマフォリーク対策）
         try:
@@ -498,47 +499,55 @@ class ImageEvaluator:
         except Exception:
             pass
         
-        # スレッドプールを使用して並列処理
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
-        try:
-            # バッチごとに並列処理を実行
-            futures = [executor.submit(self._evaluate_batch, batch) for batch in batches]
-            
-            # 進捗状況を表示しながら結果を取得
-            for future in tqdm(
-                concurrent.futures.as_completed(futures), 
-                total=len(futures), 
-                desc="画像評価中", 
-                unit="バッチ",
-                colour=True,
-                ncols=100,
-                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} バッチ [{elapsed}<{remaining}, {rate_fmt}]"
-            ):
-                batch_results = future.result()
-                results.extend(batch_results)
-        finally:
-            # 明示的にエグゼキュータをシャットダウン
-            executor.shutdown(wait=True)
-            
-            # ガベージコレクションを実行
-            import gc
-            gc.collect()
+        # ThreadPoolExecutorを使用せず、直接スレッドを管理
+        class BatchThread(threading.Thread):
+            def __init__(self, evaluator, batch):
+                threading.Thread.__init__(self)
+                self.evaluator = evaluator
+                self.batch = batch
+                self.result = None
                 
-        # 結果を整理（元の順序を維持）
-        sorted_results = []
-        result_dict = {id(img): img for img in results}
-        for img in images:
-            if id(img) in result_dict:
-                sorted_results.append(result_dict[id(img)])
-            else:
-                # 何らかの理由で結果が見つからない場合
-                img['evaluation'] = None
-                img['score'] = 0
-                img['is_good'] = False
-                sorted_results.append(img)
+            def run(self):
+                self.result = self.evaluator._evaluate_batch(self.batch)
+        
+        # 進捗バーの設定
+        pbar = tqdm(
+            total=len(batches),
+            desc="画像評価中",
+            unit="バッチ",
+            colour=True,
+            ncols=100,
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} バッチ [{elapsed}<{remaining}, {rate_fmt}]"
+        )
+        
+        try:
+            # バッチごとに処理（最大max_workers個のスレッドを同時実行）
+            for i in range(0, len(batches), max_workers):
+                # 現在のバッチグループ
+                current_batches = batches[i:i+max_workers]
+                threads = []
+                
+                # スレッドを作成して開始
+                for batch in current_batches:
+                    thread = BatchThread(self, batch)
+                    thread.start()
+                    threads.append(thread)
+                
+                # すべてのスレッドが終了するのを待機
+                for thread in threads:
+                    thread.join()
+                    if thread.result:
+                        all_results.extend(thread.result)
+                    pbar.update(1)
+                
+                # メモリ解放のためにガベージコレクションを実行
+                import gc
+                gc.collect()
+        finally:
+            pbar.close()
                 
         # 良い写真の数をカウント
-        good_images = [img for img in sorted_results if img.get('is_good', False)]
-        logger.info(f"評価完了: 合計{len(sorted_results)}枚中{len(good_images)}枚が良い写真と判断されました")
+        good_images = [img for img in all_results if img.get('is_good', False)]
+        logger.info(f"評価完了: 合計{len(all_results)}枚中{len(good_images)}枚が良い写真と判断されました")
         
-        return sorted_results
+        return all_results
