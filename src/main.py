@@ -9,12 +9,23 @@ import os
 os.environ["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
 os.environ["PYTHONMULTIPROCESSING"] = "1"
 
+# 警告フィルターを設定（セマフォリーク警告を無視）
+import warnings
+warnings.filterwarnings("ignore", message="resource_tracker: There appear to be .* leaked semaphore objects")
+
 # multiprocessingのスタートメソッドを設定
 import multiprocessing
 try:
     # macOSでは'spawn'を使用
     if hasattr(multiprocessing, 'set_start_method'):
         multiprocessing.set_start_method('spawn', force=True)
+except Exception:
+    pass
+
+# リソーストラッカーを無効化
+try:
+    if hasattr(multiprocessing, 'resource_tracker'):
+        multiprocessing.resource_tracker._resource_tracker = None
 except Exception:
     pass
 
